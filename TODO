@@ -1,0 +1,4 @@
+* --recurse option to handle deps
+* --local for packages not in registry
+* --output-dir
+* handle man pages

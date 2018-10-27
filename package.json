@@ -1,0 +1,21 @@
+{
+  "name": "npm2srpm",
+  "version": "1.0.0",
+  "description": "Create a SRPM from an npm module",
+  "author": "dshea@redhat.com",
+  "license": "GPL-2.0+",
+  "repository": "github:dashea/npm2srpm.git",
+  "bin": "./npm2srpm",
+  "dependencies": {
+    "csv-parse": "^3.1.3",
+    "dateformat": "^3.0.3",
+    "handlebars": "^4.0.12",
+    "read-package-json": "^2.0.13",
+    "request": "^2.88.0",
+    "semver": "^5.6.0",
+    "silent-npm-registry-client": "^3.0.1",
+    "tar-fs": "^1.16.3",
+    "tmp": "0.0.33",
+    "yargs": "^12.0.2"
+  }
+}
