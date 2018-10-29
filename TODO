@@ -2,3 +2,4 @@
 * --local for packages not in registry
 * --output-dir
 * handle man pages
+* add a README
