@@ -1,3 +1,4 @@
+# vim:filetype=spec.mustache
 %global modulename {{{name}}}
 
 Name:           npmlib-{{{name}}}
