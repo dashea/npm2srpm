@@ -60,7 +60,7 @@ function encodeModuleName(moduleName) {
   return moduleName.replace(/\//g, '%2F');
 }
 
-function processModule(moduleName, versionMatch, isLocal) {
+function processModule(moduleName, versionMatch, isLocal, registryUrl) {
   // if this is a local module, create a new tmp directory,
   // unpack the tarball and skip to makeSRPM
   if (isLocal) {
@@ -73,12 +73,12 @@ function processModule(moduleName, versionMatch, isLocal) {
         });
     });
   } else {
-    processModuleRegistry(moduleName, versionMatch);
+    processModuleRegistry(moduleName, versionMatch, registryUrl);
   }
 }
 
-function processModuleRegistry(moduleName, versionMatch) {
-  var uri = 'https://registry.npmjs.org/' + encodeModuleName(moduleName);
+function processModuleRegistry(moduleName, versionMatch, registryUrl) {
+  var uri = registryUrl + encodeModuleName(moduleName);
 
   npmClient.get(uri, npmClientConf, (error, data, raw, res) => {
     if (error) {
@@ -88,7 +88,7 @@ function processModuleRegistry(moduleName, versionMatch) {
     // find a matching version
     // start with the dist-tags
     if (versionMatch in data["dist-tags"]) {
-      processVersion(moduleName, data["dist-tags"][versionMatch]);
+      processVersion(moduleName, data["dist-tags"][versionMatch], registryUrl);
     } else {
       // Otherwise, treat versionMatch as a semver expression and look
       // for the greatest match
@@ -98,17 +98,17 @@ function processModuleRegistry(moduleName, versionMatch) {
         throw "No version available for " + moduleName + " matching " + versionMatch;
       }
 
-      processVersion(moduleName, version);
+      processVersion(moduleName, version, registryUrl);
     }
   });
 }
 
-function processVersion(moduleName, moduleVersion) {
+function processVersion(moduleName, moduleVersion, registryUrl) {
   // Grab and verify the dist tarball, unpack it
   tmp.dir({unsafeCleanup: true}, (err, tmpPath, cleanup) => {
     if (err) throw err;
 
-    var uri = 'https://registry.npmjs.org/' + encodeModuleName(moduleName) + '/' + moduleVersion;
+    var uri = registryUrl + encodeModuleName(moduleName) + '/' + moduleVersion;
 
     npmClient.get(uri, npmClient, (err, data, raw, res) => {
       if (err) throw err;
@@ -343,6 +343,11 @@ async function main() {
       default: false,
       describe: 'Use a local module tarball instead of a npm registry'
     })
+    .option('registry', {
+      type: 'string',
+      default: 'https://registry.npmjs.org/',
+      describe: 'Base URL of the npm registry to use'
+    })
     .strict()
     .argv;
 
@@ -357,7 +362,11 @@ async function main() {
   }
 
   try {
-    await processModule(argv._[0], argv.tag, argv.local);
+    var registryUrl = argv.registry;
+    if (!registryUrl.endsWith('/')) {
+      registryUrl += '/';
+    }
+    await processModule(argv._[0], argv.tag, argv.local, registryUrl);
   } catch (e) {
     console.error("Error creating SRPM: " + e);
     process.exit(1);

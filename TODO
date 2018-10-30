@@ -1,5 +1,4 @@
 * --recurse option to handle deps
 * --output-dir
-* specify different registry URL
 * handle man pages
 * add a README
