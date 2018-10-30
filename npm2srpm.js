@@ -60,7 +60,24 @@ function encodeModuleName(moduleName) {
   return moduleName.replace(/\//g, '%2F');
 }
 
-function processModule(moduleName, versionMatch) {
+function processModule(moduleName, versionMatch, isLocal) {
+  // if this is a local module, create a new tmp directory,
+  // unpack the tarball and skip to makeSRPM
+  if (isLocal) {
+    tmp.dir({unsafeCleanup: true}, (err, tmpPath, cleanup) => {
+      if (err) throw err;
+
+      unpackTarball(moduleName, tmpPath)
+        .on('finish', () => {
+          makeSRPM(tmpPath, path.basename(moduleName), path.dirname(moduleName), path.join(tmpPath, 'package'));
+        });
+    });
+  } else {
+    processModuleRegistry(moduleName, versionMatch);
+  }
+}
+
+function processModuleRegistry(moduleName, versionMatch) {
   var uri = 'https://registry.npmjs.org/' + encodeModuleName(moduleName);
 
   npmClient.get(uri, npmClientConf, (error, data, raw, res) => {
@@ -124,7 +141,7 @@ function processVersion(moduleName, moduleVersion) {
           // tarballs from npm will unpack into a 'package' directory
           unpackTarball(outputPath, tmpPath)
             .on('finish', () => {
-              makeSRPM(tmpPath, data, path.join(tmpPath, 'package'));
+              makeSRPM(tmpPath, data.dist.tarball, path.dirname(outputPath), path.join(tmpPath, 'package'));
             });
         });
     });
@@ -226,7 +243,7 @@ function mapBin(bin) {
   }
 }
 
-function makeSRPM(tmpPath, regData, modulePath) {
+function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath) {
   // Read the package.json file
   // use read-package-json to normalize the data
   readPackageJSON(path.join(modulePath, 'package.json'), (err, packageData) => {
@@ -274,7 +291,7 @@ function makeSRPM(tmpPath, regData, modulePath) {
         description: packageData.description,
         license: spdxToFedora(packageData.license),
         url: packageUrl,
-        sourceUrl: regData.dist.tarball,
+        sourceUrl: sourceUrl,
         buildRequires: depsToBuildReqs(packageData.dependencies),
         description: packageData.description,
         binList: mapBin(packageData.bin),
@@ -295,7 +312,7 @@ function makeSRPM(tmpPath, regData, modulePath) {
           child_process.execFile('rpmbuild',
             ['-bs',
               '-D', '_srcrpmdir .',
-              '-D', '_sourcedir ' + tmpPath,
+              '-D', '_sourcedir ' + sourceDir,
               '-D', '_specdir ' + tmpPath,
               specFilePath
             ], (err, stdout, stderr) => {
@@ -321,6 +338,11 @@ async function main() {
       describe: 'Install the given tag or version',
       type: 'string'
     })
+    .option('local', {
+      type: 'boolean',
+      default: false,
+      describe: 'Use a local module tarball instead of a npm registry'
+    })
     .strict()
     .argv;
 
@@ -335,7 +357,7 @@ async function main() {
   }
 
   try {
-    await processModule(argv._[0], argv.tag);
+    await processModule(argv._[0], argv.tag, argv.local);
   } catch (e) {
     console.error("Error creating SRPM: " + e);
     process.exit(1);

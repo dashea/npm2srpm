@@ -1,5 +1,5 @@
 * --recurse option to handle deps
-* --local for packages not in registry
 * --output-dir
+* specify different registry URL
 * handle man pages
 * add a README
