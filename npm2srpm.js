@@ -60,7 +60,7 @@ function encodeModuleName(moduleName) {
   return moduleName.replace(/\//g, '%2F');
 }
 
-function processModule(moduleName, versionMatch, isLocal, registryUrl) {
+function processModule(moduleName, versionMatch, isLocal, registryUrl, specOnly) {
   // if this is a local module, create a new tmp directory,
   // unpack the tarball and skip to makeSRPM
   if (isLocal) {
@@ -69,15 +69,15 @@ function processModule(moduleName, versionMatch, isLocal, registryUrl) {
 
       unpackTarball(moduleName, tmpPath)
         .on('finish', () => {
-          makeSRPM(tmpPath, path.basename(moduleName), path.dirname(moduleName), path.join(tmpPath, 'package'));
+          makeSRPM(tmpPath, path.basename(moduleName), path.dirname(moduleName), path.join(tmpPath, 'package'), specOnly);
         });
     });
   } else {
-    processModuleRegistry(moduleName, versionMatch, registryUrl);
+    processModuleRegistry(moduleName, versionMatch, registryUrl, specOnly);
   }
 }
 
-function processModuleRegistry(moduleName, versionMatch, registryUrl) {
+function processModuleRegistry(moduleName, versionMatch, registryUrl, specOnly) {
   var uri = registryUrl + encodeModuleName(moduleName);
 
   npmClient.get(uri, npmClientConf, (error, data, raw, res) => {
@@ -88,7 +88,7 @@ function processModuleRegistry(moduleName, versionMatch, registryUrl) {
     // find a matching version
     // start with the dist-tags
     if (versionMatch in data["dist-tags"]) {
-      processVersion(moduleName, data["dist-tags"][versionMatch], registryUrl);
+      processVersion(moduleName, data["dist-tags"][versionMatch], registryUrl, specOnly);
     } else {
       // Otherwise, treat versionMatch as a semver expression and look
       // for the greatest match
@@ -98,12 +98,12 @@ function processModuleRegistry(moduleName, versionMatch, registryUrl) {
         throw "No version available for " + moduleName + " matching " + versionMatch;
       }
 
-      processVersion(moduleName, version, registryUrl);
+      processVersion(moduleName, version, registryUrl, specOnly);
     }
   });
 }
 
-function processVersion(moduleName, moduleVersion, registryUrl) {
+function processVersion(moduleName, moduleVersion, registryUrl, specOnly) {
   // Grab and verify the dist tarball, unpack it
   tmp.dir({unsafeCleanup: true}, (err, tmpPath, cleanup) => {
     if (err) throw err;
@@ -141,7 +141,7 @@ function processVersion(moduleName, moduleVersion, registryUrl) {
           // tarballs from npm will unpack into a 'package' directory
           unpackTarball(outputPath, tmpPath)
             .on('finish', () => {
-              makeSRPM(tmpPath, data.dist.tarball, path.dirname(outputPath), path.join(tmpPath, 'package'));
+              makeSRPM(tmpPath, data.dist.tarball, path.dirname(outputPath), path.join(tmpPath, 'package'), specOnly);
             });
         });
     });
@@ -275,7 +275,7 @@ function mapMan(man) {
   });
 }
 
-function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath) {
+function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly) {
   // Read the package.json file
   // use read-package-json to normalize the data
   readPackageJSON(path.join(modulePath, 'package.json'), (err, packageData) => {
@@ -340,29 +340,37 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath) {
       };
 
       var specFileData = template(specData);
-      var specFilePath = path.join(tmpPath, 'npmlib-' + moduleName + '.spec');
+      var specFilePath = 'npmlib-' + moduleName + '.spec';
 
-      // write the spec file
-      fs.writeFile(specFilePath, specFileData, {encoding: 'utf-8'}, (err) => {
+      // if only the spec file is requested, just write it to the current directory
+      if (specOnly) {
+        fs.writeFile(specFilePath, specFileData, {encoding: 'utf-8'}, (err) => {
           if (err) throw err;
-
-          // create an SRPM
-          child_process.execFile('rpmbuild',
-            ['-bs',
-              '-D', '_srcrpmdir .',
-              '-D', '_sourcedir ' + sourceDir,
-              '-D', '_specdir ' + tmpPath,
-              specFilePath
-            ], (err, stdout, stderr) => {
-              if (err) {
-                console.error(stderr);
-                throw err;
-              }
-
-              console.log(stdout);
-              console.log(stderr);
-            });
+          console.log('Wrote: ' + specFilePath);
         });
+      } else {
+        // write the spec file to the tmp directory
+        fs.writeFile(path.join(tmpPath, specFilePath), specFileData, {encoding: 'utf-8'}, (err) => {
+            if (err) throw err;
+
+            // create an SRPM
+            child_process.execFile('rpmbuild',
+              ['-bs',
+                '-D', '_srcrpmdir .',
+                '-D', '_sourcedir ' + sourceDir,
+                '-D', '_specdir ' + tmpPath,
+                path.join(tmpPath, specFilePath)
+              ], (err, stdout, stderr) => {
+                if (err) {
+                  console.error(stderr);
+                  throw err;
+                }
+
+                console.log(stdout);
+                console.log(stderr);
+              });
+          });
+      }
     });
   });
 }
@@ -386,6 +394,11 @@ async function main() {
       default: 'https://registry.npmjs.org/',
       describe: 'Base URL of the npm registry to use'
     })
+    .option('spec-only', {
+      type: 'boolean',
+      default: false,
+      describe: 'Output only a .spec file instead of a SRPM'
+    })
     .strict()
     .argv;
 
@@ -404,7 +417,7 @@ async function main() {
     if (!registryUrl.endsWith('/')) {
       registryUrl += '/';
     }
-    await processModule(argv._[0], argv.tag, argv.local, registryUrl);
+    await processModule(argv._[0], argv.tag, argv.local, registryUrl, argv['spec-only']);
   } catch (e) {
     console.error("Error creating SRPM: " + e);
     process.exit(1);
