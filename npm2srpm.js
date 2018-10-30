@@ -366,8 +366,8 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly) {
                   throw err;
                 }
 
-                console.log(stdout);
-                console.log(stderr);
+                process.stdout.write(stdout);
+                process.stderr.write(stderr);
               });
           });
       }
