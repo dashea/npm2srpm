@@ -52,6 +52,8 @@ ln -s %{npmlib_sitelib}/%{modulename}/%{version}/{{{modulePath}}} %{buildroot}/%
 mkdir -p %{buildroot}%{nodejs_sitelib}
 ln -s %{npmlib_sitelib}/%{modulename}/%{version} %{buildroot}/%{nodejs_sitelib}/%{modulename}
 
+%{npmlib_symlink_deps}
+
 %files
 {{#each docList}}
 %doc {{{docName}}}
