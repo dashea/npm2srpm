@@ -140,14 +140,14 @@ function spdxToFedora(spdxLicense) {
     orLater = true;
   }
 
-  var spdxMatch = licenseRecords.filter((rec) => rec["SPDX License Identifier"] == spdxLicense);
+  var spdxMatch = licenseRecords.filter((rec) => rec["SPDX License Identifier"] == licenseKey);
   if (spdxMatch.length !== 1) {
-    return null;
+    throw "No SPDX identifier found for " + licenseKey;
   }
 
   var fedoraName = spdxMatch[0]["Fedora Short Name"];
   if (!fedoraName) {
-    return null;
+    throw "No Fedora equivalent found for " + spdxLicense;
   }
 
   if (orLater) {
