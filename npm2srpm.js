@@ -243,6 +243,38 @@ function mapBin(bin) {
   }
 }
 
+// split up man pages by section
+function mapMan(man) {
+
+  // start with an object indexed by section number, each section number
+  // containing an array of man pages in that section
+  // e.g., {"1": ['./man/cool-program.1', './man/lame-program.1.gz'], "5": ['./man/cool-program.conf.5']}
+  var manSections = {};
+  if (man) {
+    man.forEach((s) => {
+      var sectionMatch = s.match(/\.([0-9]+)(\.gz)?$/);
+      if (sectionMatch === null) {
+        throw "Invalid man page name: " + s;
+      }
+
+      var section = sectionMatch[1];
+      if (!(section in manSections)) {
+        manSections[section] = new Array();
+      }
+      manSections[section].push(s);
+    });
+  }
+
+  // convert that into something more usable by the template
+  // [ {manSection: "1", manPages: [{modulePath: './man/cool-program.1', manPath: 'cool-program.1', compressed: false},
+  //                                {modulePath: './man/lame-program.1', manPath: 'lame-program.1.gz', compressed: true}] },
+  //   {manSection: "5", manPages: [{modulePath: './man/cool-program.conf.5', manPath: 'cool-program.conf.5', compressed: false}]}]
+  return Object.entries(manSections).map(([section, files]) => {
+    return {manSection: section,
+            manPages: files.map((f) => { return {modulePath: f, manPath: path.basename(f), compressed: f.endsWith('.gz')}; })};
+  });
+}
+
 function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath) {
   // Read the package.json file
   // use read-package-json to normalize the data
@@ -283,6 +315,10 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath) {
         packageUrl = null;
       }
 
+      var manList = mapMan(packageData.man);
+      // whether any man pages included in npm-library are compressed
+      var compressedManPages = manList.some((section) => section.manPages.some((page) => page.compressed));
+
       // construct the data for the template
       var specData = {
         name: moduleName,
@@ -298,7 +334,9 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath) {
         cldate: dateformat(Date(), 'ddd mmm d yyyy'),
         fileList: fileList,
         docList: docList,
-        licenseList: licenseList
+        licenseList: licenseList,
+        manList: mapMan(packageData.man),
+        compressedManPages: compressedManPages
       };
 
       var specFileData = template(specData);

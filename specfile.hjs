@@ -20,6 +20,9 @@ ExclusiveArch:  %{nodejs_arches} noarch
 {{#each buildRequires}}
 BuildRequires:  {{{buildRequiresExp}}}
 {{/each}}
+{{#if compressedManPages}}
+BuildRequires:  /bin/gunzip
+{{/if}}
 
 %description
 {{{description}}}
@@ -49,6 +52,17 @@ mkdir -p %{buildroot}%{_bindir}
 ln -s %{npmlib_sitelib}/%{modulename}/%{version}/{{{modulePath}}} %{buildroot}/%{_bindir}/{{{binPath}}}
 {{/each}}
 
+{{#each manList}}
+mkdir -p %{buildroot}%{_mandir}/man{{{manSection}}}
+{{#each manPages}}
+{{! symlinking man pages doesn't work well, since rpm will auto-compress it but only rename the symlink }}
+cp %{buildroot}%{npmlib_sitelib}/%{modulename}/%{version}/{{{modulePath}}} %{buildroot}/%{_mandir}/man{{{../manSection}}}/{{{manPath}}}
+{{#if compressed}}
+gunzip %{buildroot}/%{_mandir}/man{{{../manSection}}}/{{{manPath}}}
+{{/if}}
+{{/each}}
+{{/each}}
+
 mkdir -p %{buildroot}%{nodejs_sitelib}
 ln -s %{npmlib_sitelib}/%{modulename}/%{version} %{buildroot}/%{nodejs_sitelib}/%{modulename}
 
@@ -63,6 +77,11 @@ ln -s %{npmlib_sitelib}/%{modulename}/%{version} %{buildroot}/%{nodejs_sitelib}/
 {{/each}}
 {{#each binList}}
 %{_bindir}/{{{binPath}}}
+{{/each}}
+{{#each manList}}
+{{#each manPages}}
+%{_mandir}/man{{{../manSection}}}/{{{manPath}}}*
+{{/each}}
 {{/each}}
 %{nodejs_sitelib}/%{modulename}
 
