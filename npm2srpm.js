@@ -26,6 +26,7 @@ const path = require('path');
 const readPackageJSON = require('read-package-json');
 const request = require('request');
 const semver = require('semver');
+const spdxCorrect = require('spdx-correct');
 const stream = require('stream');
 const tar = require('tar-fs');
 const tmp = require('tmp');
@@ -149,13 +150,7 @@ function processVersion(moduleName, moduleVersion, registryUrl, specOnly) {
 }
 
 function spdxToFedora(spdxLicense) {
-  // Look for a "+" at the end of the license name
-  var licenseKey = spdxLicense;
-  var orLater = false;
-  if (licenseKey.endsWith('+')) {
-    licenseKey = licenseKey.replace(/\+$/, '');
-    orLater = true;
-  }
+  var licenseKey = spdxCorrect(spdxLicense);
 
   var spdxMatch = licenseRecords.filter((rec) => rec["SPDX License Identifier"] == licenseKey);
   if (spdxMatch.length !== 1) {
@@ -167,9 +162,6 @@ function spdxToFedora(spdxLicense) {
     throw "No Fedora equivalent found for " + spdxLicense;
   }
 
-  if (orLater) {
-    fedoraName += "+";
-  }
   return fedoraName;
 }
 
