@@ -150,10 +150,19 @@ function processVersion(moduleName, moduleVersion, registryUrl, specOnly) {
   });
 }
 
-function spdxToFedora(spdxLicense) {
-  var fedoraLicense = spdxExpressionToFedora(spdxParse(spdxCorrect(spdxLicense)));
+function spdxToFedora(packageData) {
+  var licenseString;
+  if ("license" in packageData) {
+    licenseString = packageData.license;
+  } else if ("licenses" in packageData) {
+    licenseString = packageData.licenses.map((license) => license.type).join(' or ');
+  } else {
+    throw "No license data found";
+  }
+
+  var fedoraLicense = spdxExpressionToFedora(spdxParse(spdxCorrect(licenseString)));
   if (fedoraLicense === null) {
-    throw "No Fedora equivalent found for " + spdxLicense;
+    throw "No Fedora equivalent found for " + licenseString;
   }
 
   return fedoraLicense;
@@ -360,7 +369,7 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly) {
         version: packageData.version,
         summary: packageData.description.split('\n')[0],
         description: packageData.description,
-        license: spdxToFedora(packageData.license),
+        license: spdxToFedora(packageData),
         url: packageUrl,
         sourceUrl: sourceUrl,
         buildRequires: depsToBuildReqs(packageData.dependencies),
