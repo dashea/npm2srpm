@@ -27,6 +27,7 @@ const readPackageJSON = require('read-package-json');
 const request = require('request');
 const semver = require('semver');
 const spdxCorrect = require('spdx-correct');
+const spdxParse = require('spdx-expression-parse');
 const stream = require('stream');
 const tar = require('tar-fs');
 const tmp = require('tmp');
@@ -150,19 +151,61 @@ function processVersion(moduleName, moduleVersion, registryUrl, specOnly) {
 }
 
 function spdxToFedora(spdxLicense) {
-  var licenseKey = spdxCorrect(spdxLicense);
-
-  var spdxMatch = licenseRecords.filter((rec) => rec["SPDX License Identifier"] == licenseKey);
-  if (spdxMatch.length !== 1) {
-    throw "No SPDX identifier found for " + licenseKey;
-  }
-
-  var fedoraName = spdxMatch[0]["Fedora Short Name"];
-  if (!fedoraName) {
+  var fedoraLicense = spdxExpressionToFedora(spdxParse(spdxCorrect(spdxLicense)));
+  if (fedoraLicense === null) {
     throw "No Fedora equivalent found for " + spdxLicense;
   }
 
-  return fedoraName;
+  return fedoraLicense;
+}
+
+function spdxExpressionToFedora(expr) {
+  if ('conjunction' in expr) {
+    // try to find matches for each half
+    var leftLicense = spdxExpressionToFedora(expr.left);
+    var rightLicense = spdxExpressionToFedora(expr.right);
+
+    if (expr.conjunction === "and") {
+      // if either side is null, we cannot continue
+      if (leftLicense === null || rightLicense === null) {
+        return null;
+      }
+
+      return "(" + leftLicense + " and " + rightLicense + ")";
+    } else {
+      // if both sides are null, we cannot continue
+      if (leftLicense === null && rightLicense === null) {
+        return null;
+      }
+
+      // if one is null, just return the other
+      if (leftLicense === null) {
+        return rightLicense;
+      } else if (rightLicense === null) {
+        return leftLicense;
+      } else {
+        return "(" + leftLicense + " or " + rightLicense + ")";
+      }
+    }
+  } else {
+    // Find the SPDX license in the CSV data
+    var spdxMatch = licenseRecords.filter((rec) => rec["SPDX License Identifier"] == expr.license);
+    if (spdxMatch.length === 0) {
+      // unsupported license
+      return null;
+    }
+    if (spdxMatch.length > 1) {
+      // data error
+      throw "More than one license found for " + expr.license;
+    }
+
+    var fedoraName = spdxMatch[0]["Fedora Short Name"];
+    if (!fedoraName) {
+      return null;
+    }
+
+    return fedoraName;
+  }
 }
 
 // convert one part of a semver range (i.e., >=1.2.3) to a RPM dep expression
