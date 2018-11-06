@@ -288,7 +288,7 @@ function mapBin(bin) {
 }
 
 // split up man pages by section
-function mapMan(man) {
+function mapMan(tmpPath, man) {
 
   // start with an object indexed by section number, each section number
   // containing an array of man pages in that section
@@ -315,7 +315,12 @@ function mapMan(man) {
   //   {manSection: "5", manPages: [{modulePath: './man/cool-program.conf.5', manPath: 'cool-program.conf.5', compressed: false}]}]
   return Object.entries(manSections).map(([section, files]) => {
     return {manSection: section,
-            manPages: files.map((f) => { return {modulePath: f, manPath: path.basename(f), compressed: f.endsWith('.gz')}; })};
+      manPages: files.map((f) => { 
+        // if the man object was generated from directories.man, it's full of absolute
+        // paths. We need those to be relative to the package directory.
+        var modulePath = path.relative(path.join(tmpPath, 'package'), f);
+        return {modulePath: modulePath, manPath: path.basename(f), compressed: f.endsWith('.gz')}; 
+      })};
   });
 }
 
@@ -359,7 +364,7 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly) {
         packageUrl = null;
       }
 
-      var manList = mapMan(packageData.man);
+      var manList = mapMan(tmpPath, packageData.man);
       // whether any man pages included in npm-library are compressed
       var compressedManPages = manList.some((section) => section.manPages.some((page) => page.compressed));
 
@@ -379,7 +384,7 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly) {
         fileList: fileList,
         docList: docList,
         licenseList: licenseList,
-        manList: mapMan(packageData.man),
+        manList: mapMan(tmpPath, packageData.man),
         compressedManPages: compressedManPages
       };
 
