@@ -26,6 +26,8 @@ BuildRequires:  {{{buildRequiresExp}}}
 BuildRequires:  /bin/gunzip
 {{/if}}
 
+Requires:       %{name}-%{version} = %{version}-%{release}
+
 %description
 {{{description}}}
 
