@@ -2,6 +2,8 @@
 }}
 %global modulename {{{name}}}
 
+%define __requires_exclude_from ^%{npmlib_sitelib}/%{modulename}/%{version}/tests?/.*
+
 Name:           npmlib-{{{name}}}
 Version:        {{{version}}}
 Release:        1%{?dist}
