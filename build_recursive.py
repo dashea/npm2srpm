@@ -105,7 +105,7 @@ def processSRPM(path: str, tmpobj: Optional[tempfile.TemporaryDirectory]=None) -
 
         # start the build
         print("Starting build for %s" % path)
-        build = coprClient.build_proxy.create_from_file(COPR_OWNER, COPR_PROJECT, path, buildopts={"background": True})
+        build = coprClient.build_proxy.create_from_file(COPR_OWNER, COPR_PROJECT, path)
 
         # monitor the build
         while True:
