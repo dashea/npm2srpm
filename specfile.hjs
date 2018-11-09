@@ -1,10 +1,15 @@
 {{! vim:filetype=spec.mustache
 }}
+{{#if scope}}
+%global modulescope {{{scope}}}
+%global modulename {{{scope}}}/{{{name}}}
+{{else}}
 %global modulename {{{name}}}
+{{/if}}
 
 %define __requires_exclude_from ^%{npmlib_sitelib}/%{modulename}/%{version}/tests?/.*
 
-Name:           npmlib-{{{name}}}
+Name:           {{{packageName}}}
 Version:        {{{version}}}
 Release:        1%{?dist}
 Summary:        {{{summary}}}
@@ -70,6 +75,9 @@ gunzip %{buildroot}/%{_mandir}/man{{{../manSection}}}/{{{manPath}}}
 {{/each}}
 
 mkdir -p %{buildroot}%{nodejs_sitelib}
+{{#if scope}}
+mkdir %{buildroot}%{nodejs_sitelib}/%{modulescope}
+{{/if}}
 ln -s %{npmlib_sitelib}/%{modulename}/%{version} %{buildroot}/%{nodejs_sitelib}/%{modulename}
 
 %{npmlib_symlink_deps}
@@ -90,6 +98,9 @@ ln -s %{npmlib_sitelib}/%{modulename}/%{version} %{buildroot}/%{nodejs_sitelib}/
 {{/each}}
 {{/each}}
 %{nodejs_sitelib}/%{modulename}
+{{#if scope}}
+%dir %{nodejs_sitelib}/%{modulescope}
+{{/if}}
 
 %files {{{version}}}
 {{#each docList}}
@@ -99,6 +110,9 @@ ln -s %{npmlib_sitelib}/%{modulename}/%{version} %{buildroot}/%{nodejs_sitelib}/
 %license {{{licenseName}}}
 {{/each}}
 %{npmlib_sitelib}/%{modulename}/%{version}
+{{#if scope}}
+%dir %{npmlib_sitelib}/%{modulescope}
+{{/if}}
 
 %changelog
 * {{{cldate}}} npm2srpm <dshea@redhat.com> - {{{version}}}-1

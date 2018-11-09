@@ -90,7 +90,7 @@ function processModuleRegistry(moduleName, versionMatch, registryUrl, specOnly) 
     // find a matching version
     // start with the dist-tags
     if (versionMatch in data["dist-tags"]) {
-      processVersion(moduleName, data["dist-tags"][versionMatch], registryUrl, specOnly);
+      processVersion(moduleName, data["dist-tags"][versionMatch], data, specOnly);
     } else {
       // Otherwise, treat versionMatch as a semver expression and look
       // for the greatest match
@@ -100,53 +100,49 @@ function processModuleRegistry(moduleName, versionMatch, registryUrl, specOnly) 
         throw "No version available for " + moduleName + " matching " + versionMatch;
       }
 
-      processVersion(moduleName, version, registryUrl, specOnly);
+      processVersion(moduleName, version, data, specOnly);
     }
   });
 }
 
-function processVersion(moduleName, moduleVersion, registryUrl, specOnly) {
+function processVersion(moduleName, moduleVersion, registryData, specOnly) {
   // Grab and verify the dist tarball, unpack it
   tmp.dir({unsafeCleanup: true}, (err, tmpPath, cleanup) => {
     if (err) throw err;
 
-    var uri = registryUrl + encodeModuleName(moduleName) + '/' + moduleVersion;
+    var data = registryData['versions'][moduleVersion];
 
-    npmClient.get(uri, npmClient, (err, data, raw, res) => {
-      if (err) throw err;
+    // parse the URL to get the filename
+    var tarballName = new url.URL(data.dist.tarball).pathname.split('/').pop();
 
-      // parse the URL to get the filename
-      var tarballName = new url.URL(data.dist.tarball).pathname.split('/').pop();
+    var outputPath = path.join(tmpPath, tarballName);
+    var outputStream = fs.createWriteStream(outputPath);
 
-      var outputPath = path.join(tmpPath, tarballName);
-      var outputStream = fs.createWriteStream(outputPath);
+    // create a pass-through stream to calculate the SHA1 as we download
+    var tee = new stream.PassThrough();
+    var hash = crypto.createHash('sha1');
+    tee
+      .on('data', (chunk) => {
+        hash.update(chunk);
+        outputStream.write(chunk);
+      });
 
-      // create a pass-through stream to calculate the SHA1 as we download
-      var tee = new stream.PassThrough();
-      var hash = crypto.createHash('sha1');
-      tee
-        .on('data', (chunk) => {
-          hash.update(chunk);
-          outputStream.write(chunk);
-        });
+    request(data.dist.tarball).pipe(tee)
+      .on('finish', () => {
+        var digest = hash.digest('hex');
 
-      request(data.dist.tarball).pipe(tee)
-        .on('finish', () => {
-          var digest = hash.digest('hex');
+        // check the hash
+        if (digest !== data.dist.shasum) {
+          throw "SHA1 digest for " + moduleName + "@" + moduleVersion + " does not match";
+        }
 
-          // check the hash
-          if (digest !== data.dist.shasum) {
-            throw "SHA1 digest for " + moduleName + "@" + moduleVersion + " does not match";
-          }
-
-          // unpack the tarball
-          // tarballs from npm will unpack into a 'package' directory
-          unpackTarball(outputPath, tmpPath)
-            .on('finish', () => {
-              makeSRPM(tmpPath, data.dist.tarball, path.dirname(outputPath), path.join(tmpPath, 'package'), specOnly);
-            });
-        });
-    });
+        // unpack the tarball
+        // tarballs from npm will unpack into a 'package' directory
+        unpackTarball(outputPath, tmpPath)
+          .on('finish', () => {
+            makeSRPM(tmpPath, data.dist.tarball, path.dirname(outputPath), path.join(tmpPath, 'package'), specOnly);
+          });
+      });
   });
 }
 
@@ -329,8 +325,18 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly) {
   // use read-package-json to normalize the data
   readPackageJSON(path.join(modulePath, 'package.json'), (err, packageData) => {
     if (err) throw err;
-    var moduleName = packageData.name.replace(/\//g, '-');
-    var packageName = 'npmlib-' + moduleName;
+    // if the package has a scope, split that out
+    var moduleName;
+    var moduleScope;
+    if (packageData.name.indexOf('/') !== -1) {
+      [moduleScope, moduleName] = packageData.name.split('/');
+    } else {
+      moduleName = packageData.name;
+      moduleScope = '';
+    }
+
+    var cleanModuleName = packageData.name.replace(/\//g, '-').replace(/@/g, '');
+    var packageName = 'npmlib-' + cleanModuleName;
 
     // Read the package directory for the top-level filenames, split them
     // up by license, doc, other
@@ -371,6 +377,8 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly) {
       // construct the data for the template
       var specData = {
         name: moduleName,
+        scope: moduleScope,
+        packageName: packageName,
         version: packageData.version,
         summary: packageData.description.split('\n')[0],
         description: packageData.description,
@@ -389,7 +397,7 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly) {
       };
 
       var specFileData = template(specData);
-      var specFilePath = 'npmlib-' + moduleName + '.spec';
+      var specFilePath = packageName + '.spec';
 
       // if only the spec file is requested, just write it to the current directory
       if (specOnly) {
