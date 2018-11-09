@@ -149,7 +149,11 @@ function processVersion(moduleName, moduleVersion, registryData, specOnly) {
 function spdxToFedora(packageData) {
   var licenseString;
   if ("license" in packageData) {
-    licenseString = packageData.license;
+    if (typeof(packageData.license) === "object") {
+      licenseString = packageData.license.type;
+    } else {
+      licenseString = packageData.license;
+    }
   } else if ("licenses" in packageData) {
     licenseString = packageData.licenses.map((license) => license.type).join(' or ');
   } else {
