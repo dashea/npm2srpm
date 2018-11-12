@@ -245,7 +245,7 @@ function mapMan(tmpPath, man) {
   }));
 }
 
-function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly) {
+function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLicense) {
   // Read the package.json file
   // use read-package-json to normalize the data
   readPackageJSON(path.join(modulePath, 'package.json'), (err, packageData) => {
@@ -300,6 +300,13 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly) {
       const compressedManPages = manList
         .some(section => section.manPages.some(page => page.compressed));
 
+      let license;
+      if (forceLicense) {
+        license = forceLicense;
+      } else {
+        license = spdxToFedora(packageData);
+      }
+
       // construct the data for the template
       const specData = {
         name: moduleName,
@@ -308,7 +315,7 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly) {
         version: packageData.version,
         summary: packageData.description.split('\n')[0],
         description: packageData.description,
-        license: spdxToFedora(packageData),
+        license,
         url: packageUrl,
         sourceUrl,
         buildRequires: depsToBuildReqs(packageData.dependencies),
@@ -357,7 +364,7 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly) {
   });
 }
 
-function processVersion(moduleName, moduleVersion, registryData, specOnly) {
+function processVersion(moduleName, moduleVersion, registryData, specOnly, forceLicense) {
   // Grab and verify the dist tarball, unpack it
   tmp.dir({ unsafeCleanup: true }, (err, tmpPath) => {
     if (err) throw err;
@@ -392,13 +399,13 @@ function processVersion(moduleName, moduleVersion, registryData, specOnly) {
         // tarballs from npm will unpack into a 'package' directory
         unpackTarball(outputPath, tmpPath)
           .on('finish', () => {
-            makeSRPM(tmpPath, data.dist.tarball, path.dirname(outputPath), path.join(tmpPath, 'package'), specOnly);
+            makeSRPM(tmpPath, data.dist.tarball, path.dirname(outputPath), path.join(tmpPath, 'package'), specOnly, forceLicense);
           });
       });
   });
 }
 
-function processModuleRegistry(moduleName, versionMatch, registryUrl, specOnly) {
+function processModuleRegistry(moduleName, versionMatch, registryUrl, specOnly, forceLicense) {
   const uri = registryUrl + encodeModuleName(moduleName);
   let versions;
   let version;
@@ -421,12 +428,12 @@ function processModuleRegistry(moduleName, versionMatch, registryUrl, specOnly) 
         throw new Error(`No version available for ${moduleName} matching ${versionMatch}`);
       }
 
-      processVersion(moduleName, version, data, specOnly);
+      processVersion(moduleName, version, data, specOnly, forceLicense);
     }
   });
 }
 
-function processModule(moduleName, versionMatch, isLocal, registryUrl, specOnly) {
+function processModule(moduleName, versionMatch, isLocal, registryUrl, specOnly, forceLicense) {
   // if this is a local module, create a new tmp directory,
   // unpack the tarball and skip to makeSRPM
   if (isLocal) {
@@ -435,11 +442,16 @@ function processModule(moduleName, versionMatch, isLocal, registryUrl, specOnly)
 
       unpackTarball(moduleName, tmpPath)
         .on('finish', () => {
-          makeSRPM(tmpPath, path.basename(moduleName), path.dirname(moduleName), path.join(tmpPath, 'package'), specOnly);
+          makeSRPM(tmpPath,
+            path.basename(moduleName),
+            path.dirname(moduleName),
+            path.join(tmpPath, 'package'),
+            specOnly,
+            forceLicense);
         });
     });
   } else {
-    processModuleRegistry(moduleName, versionMatch, registryUrl, specOnly);
+    processModuleRegistry(moduleName, versionMatch, registryUrl, specOnly, forceLicense);
   }
 }
 
@@ -467,6 +479,10 @@ async function main() {
       default: false,
       describe: 'Output only a .spec file instead of a SRPM',
     })
+    .option('force-license', {
+      type: 'string',
+      describe: 'Set the license string to use in the spec file',
+    })
     .strict();
 
   if (argv._.length === 0) {
@@ -484,7 +500,7 @@ async function main() {
     if (!registryUrl.endsWith('/')) {
       registryUrl += '/';
     }
-    await processModule(argv._[0], argv.tag, argv.local, registryUrl, argv['spec-only']);
+    await processModule(argv._[0], argv.tag, argv.local, registryUrl, argv['spec-only'], argv['force-license']);
   } catch (e) {
     console.error(`Error creating SRPM: ${e}`);
     process.exit(1);
