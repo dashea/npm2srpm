@@ -1,4 +1,4 @@
-{{! vim:filetype=spec.mustache
+{{! vim:filetype=spec.handlebars
 }}
 {{#if scope}}
 %global modulescope {{{scope}}}
