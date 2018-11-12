@@ -71,11 +71,15 @@ def processSRPM(path: str, tmpobj: Optional[tempfile.TemporaryDirectory]=None) -
         # convert the RPM boolean back to a semver-ish string by removing the npmlib(whatever) identifiers,
         # removing the spaces between operators and version numbers, replacing ' with ' with ' ', replacing
         # ' or ' with ' || ', and dropping all grouping parenthesis
-        reqSemver = re.sub(r'npmlib\([^)]*\) ', '', req)
-        reqSemver = re.sub(r'([<>=]) ', r'\1', reqSemver)
-        reqSemver = re.sub(r' with ', ' ', reqSemver)
-        reqSemver = re.sub(r' or ', ' || ', reqSemver)
-        reqSemver = re.sub(r'[()]', '', reqSemver)
+        # if there is no operator in the expression, then there is no version
+        if not re.search(r'[<>=]', req):
+            reqSemver = None
+        else:
+            reqSemver = re.sub(r'npmlib\([^)]*\) ', '', req)
+            reqSemver = re.sub(r'([<>=]) ', r'\1', reqSemver)
+            reqSemver = re.sub(r' with ', ' ', reqSemver)
+            reqSemver = re.sub(r' or ', ' || ', reqSemver)
+            reqSemver = re.sub(r'[()]', '', reqSemver)
 
         # pylint doesn't understand locks, at least as of version 1.7.5
         with inProgressLock:    # pylint: disable=not-context-manager
@@ -95,7 +99,13 @@ def processSRPM(path: str, tmpobj: Optional[tempfile.TemporaryDirectory]=None) -
             deplist.append(waitThread)
         else:
             tempdir = tempfile.TemporaryDirectory()
-            subprocess.check_call([NPM2SRPM, '-t', reqSemver, moduleName], cwd=tempdir.name)
+
+            args = [NPM2SRPM]
+            if reqSemver:
+                args += ['-t', reqSemver]
+            args += [moduleName]
+
+            subprocess.check_call(args, cwd=tempdir.name)
             deplist.append(processSRPM(glob.glob(os.path.join(tempdir.name, '*.rpm'))[0], tempdir))
 
     def _do_build(depThreads, tmpobj, eventObj):
