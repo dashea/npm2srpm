@@ -20,6 +20,7 @@ const childProcess = require('child_process');
 const csvParseSync = require('csv-parse/lib/sync');
 const crypto = require('crypto');
 const dateformat = require('dateformat');
+const diff = require('diff');
 const fs = require('fs');
 const handlebars = require('handlebars');
 const path = require('path');
@@ -245,6 +246,55 @@ function mapMan(tmpPath, man) {
   }));
 }
 
+// "fix" any python shebang lines. return a list of generated patch files.
+// All patch files will be created at -p0
+// Any unversioned python #! will be replaced with python2, since that's what
+// node-gyp supports currently.
+function patchShebang(tmpPath, modulePath) {
+  let patchIndex = 0;
+
+  function patchShebangHelper(currentDir) {
+    const fileList = fs.readdirSync(path.join(modulePath, currentDir));
+    return fileList.reduce((acc, fileName) => {
+      const filePath = path.join(modulePath, currentDir, fileName);
+      const stat = fs.lstatSync(filePath);
+
+      // if it's a directory, recurse
+      if (stat.isDirectory()) {
+        return acc.concat(patchShebangHelper(path.join(currentDir, fileName)));
+      }
+
+      // If it's a regular file, look for an unversioned python shebang to patch.
+      // Use latin1 for everything since all we care about is the shebang, which
+      // won't have 8-bit characters (we're assuming BOM is illegal), and that
+      // way we can't have encode/decode errors on the rest of the file
+      if (stat.isFile()) {
+        const origData = fs.readFileSync(filePath, { encoding: 'latin1' });
+        // match on #!, optional whitespace, and either "[/usr]/bin/python" (unversioned),
+        // or "[/usr]/bin/env python"
+        const match = origData.match(/^#!\s*(((\/usr)?\/bin\/python)|((\/usr)?\/bin\/env python))\b/);
+        if (match) {
+          // replace the matched string with "#!/usr/bin/python2"
+          const newData = `#!/usr/bin/python2${origData.slice(match[0].length)}`;
+          const diffData = diff.createPatch(path.join(currentDir, fileName), origData, newData);
+          const patchPath = path.join(tmpPath, `npm2srpm-shebang-patch-${patchIndex}.patch`);
+          patchIndex += 1;
+
+          fs.writeFileSync(patchPath, diffData, { encoding: 'latin1' });
+          return acc.concat([patchPath]);
+        }
+
+        return acc;
+      }
+
+      // otherwise, do nothing
+      return acc;
+    }, []);
+  }
+
+  return patchShebangHelper('.');
+}
+
 function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLicense) {
   // Read the package.json file
   // use read-package-json to normalize the data
@@ -307,6 +357,8 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLice
         license = spdxToFedora(packageData);
       }
 
+      const patchlist = patchShebang(tmpPath, modulePath);
+
       // construct the data for the template
       const specData = {
         name: moduleName,
@@ -326,6 +378,7 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLice
         licenseList,
         manList: mapMan(tmpPath, packageData.man),
         compressedManPages,
+        patches: patchlist.map((patchName, idx) => ({ patchNum: idx, patchName })),
       };
 
       const specFileData = template(specData);

@@ -20,6 +20,10 @@ URL:            {{{url}}}
 {{/if}}
 Source0:        {{{sourceUrl}}}
 
+{{#each patches}}
+Patch{{{patchNum}}}: {{{patchName}}}
+{{/each}}
+
 BuildRequires:  npmlib-packaging
 
 # TODO detect non-noarch packages?
@@ -45,7 +49,7 @@ Summary:        {{{summary}}}
 {{{description}}}
 
 %prep
-%setup -q -n package
+%autosetup -p0 -n package
 
 %build
 # Nothing to build
