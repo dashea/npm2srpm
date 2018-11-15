@@ -371,6 +371,14 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLice
 
       const patchlist = patchShebang(tmpPath, modulePath);
 
+      let installScript = '';
+      if (('scripts' in packageData) && ('install' in packageData.scripts)) {
+        installScript = packageData.scripts.install;
+      }
+
+      // only node-gyp is supported for binary packages
+      const binary = fs.existsSync(path.join(modulePath, 'binding.gyp'));
+
       // construct the data for the template
       const specData = {
         name: moduleName,
@@ -392,6 +400,8 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLice
         compressedManPages,
         patches: patchlist.map((patchName, idx) => ({ patchNum: idx, patchName })),
         extraRequires,
+        installScript,
+        binary,
       };
 
       const specFileData = template(specData);

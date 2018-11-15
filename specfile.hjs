@@ -7,7 +7,15 @@
 %global modulename {{{name}}}
 {{/if}}
 
-%define __requires_exclude_from ^%{npmlib_sitelib}/%{modulename}/%{version}/tests?/.*
+{{#if binary}}
+%global npmlib_dir %{npmlib_sitearch}
+%global nodejs_dir %{nodejs_sitearch}
+{{else}}
+%global npmlib_dir %{npmlib_sitelib}
+%global nodejs_dir %{nodejs_sitelib}
+{{/if}}
+
+%define __requires_exclude_from ^%{npmlib_dir}/%{modulename}/%{version}/tests?/.*
 
 Name:           {{{packageName}}}
 Version:        {{{version}}}
@@ -26,9 +34,13 @@ Patch{{{patchNum}}}: {{{patchName}}}
 
 BuildRequires:  npmlib-packaging
 
-# TODO detect non-noarch packages?
+{{#if binary}}
+BuildRequires:  nodejs-devel
+ExclusiveArch:  %{nodejs_arches}
+{{else}}
 BuildArch:      noarch
 ExclusiveArch:  %{nodejs_arches} noarch
+{{/if}}
 
 {{#each buildRequires}}
 BuildRequires:  {{{buildRequiresExp}}}
@@ -56,37 +68,56 @@ Requires:       {{{requirement}}}
 %autosetup -p0 -n package
 
 %build
+{{#if binary}}
+%{npmlib_symlink_deps} .
+
+%{set_build_flags}
+
+# tell node-gyp to use the installed nodejs headers instead of downloading them
+npm_config_nodedir=/usr
+export npm_config_nodedir
+
+{{{installScript}}}
+{{else}}
 # Nothing to build
+{{/if}}
 
 %install
-mkdir -p %{buildroot}%{npmlib_sitelib}/%{modulename}/%{version}
+mkdir -p %{buildroot}%{npmlib_dir}/%{modulename}/%{version}
 {{#each fileList}}
-cp -pr {{{fileName}}} %{buildroot}%{npmlib_sitelib}/%{modulename}/%{version}
+cp -pr {{{fileName}}} %{buildroot}%{npmlib_dir}/%{modulename}/%{version}
 {{/each}}
+{{#if binary}}
+mkdir -p %{buildroot}%{npmlib_dir}/%{modulename}/%{version}/build/Release
+cp -p build/Release/*.node %{buildroot}%{npmlib_dir}/%{modulename}/%{version}/build/Release/
+( cd %{buildroot}%{npmlib_dir}/%{modulename}/%{version}/build/ &&
+  for f in Release/*.node ; do ln -s "${f}" . ; done
+)
+{{/if}}
 
 {{#if binList}}
 mkdir -p %{buildroot}%{_bindir}
 {{/if}}
 {{#each binList}}
-ln -s %{npmlib_sitelib}/%{modulename}/%{version}/{{{modulePath}}} %{buildroot}/%{_bindir}/{{{binPath}}}
+ln -s %{npmlib_dir}/%{modulename}/%{version}/{{{modulePath}}} %{buildroot}/%{_bindir}/{{{binPath}}}
 {{/each}}
 
 {{#each manList}}
 mkdir -p %{buildroot}%{_mandir}/man{{{manSection}}}
 {{#each manPages}}
 {{! symlinking man pages doesn't work well, since rpm will auto-compress it but only rename the symlink }}
-cp %{buildroot}%{npmlib_sitelib}/%{modulename}/%{version}/{{{modulePath}}} %{buildroot}/%{_mandir}/man{{{../manSection}}}/{{{manPath}}}
+cp %{buildroot}%{npmlib_dir}/%{modulename}/%{version}/{{{modulePath}}} %{buildroot}/%{_mandir}/man{{{../manSection}}}/{{{manPath}}}
 {{#if compressed}}
 gunzip %{buildroot}/%{_mandir}/man{{{../manSection}}}/{{{manPath}}}
 {{/if}}
 {{/each}}
 {{/each}}
 
-mkdir -p %{buildroot}%{nodejs_sitelib}
+mkdir -p %{buildroot}%{nodejs_dir}
 {{#if scope}}
-mkdir %{buildroot}%{nodejs_sitelib}/%{modulescope}
+mkdir %{buildroot}%{nodejs_dir}/%{modulescope}
 {{/if}}
-ln -s %{npmlib_sitelib}/%{modulename}/%{version} %{buildroot}/%{nodejs_sitelib}/%{modulename}
+ln -s %{npmlib_dir}/%{modulename}/%{version} %{buildroot}/%{nodejs_dir}/%{modulename}
 
 %{npmlib_symlink_deps}
 
@@ -105,9 +136,9 @@ ln -s %{npmlib_sitelib}/%{modulename}/%{version} %{buildroot}/%{nodejs_sitelib}/
 %{_mandir}/man{{{../manSection}}}/{{{manPath}}}*
 {{/each}}
 {{/each}}
-%{nodejs_sitelib}/%{modulename}
+%{nodejs_dir}/%{modulename}
 {{#if scope}}
-%dir %{nodejs_sitelib}/%{modulescope}
+%dir %{nodejs_dir}/%{modulescope}
 {{/if}}
 
 %files {{{version}}}
@@ -117,9 +148,9 @@ ln -s %{npmlib_sitelib}/%{modulename}/%{version} %{buildroot}/%{nodejs_sitelib}/
 {{#each licenseList}}
 %license {{{licenseName}}}
 {{/each}}
-%{npmlib_sitelib}/%{modulename}/%{version}
+%{npmlib_dir}/%{modulename}/%{version}
 {{#if scope}}
-%dir %{npmlib_sitelib}/%{modulescope}
+%dir %{npmlib_dir}/%{modulescope}
 {{/if}}
 
 %changelog
