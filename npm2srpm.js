@@ -310,6 +310,18 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLice
       moduleScope = '';
     }
 
+    // node-gyp has extra requirements not encoded in package.json.
+    // hardcode those here
+    let extraRequires = [];
+    if (moduleName === 'node-gyp') {
+      extraRequires = [
+        { requirement: 'python2' },
+        { requirement: 'make' },
+        { requirement: 'gcc' },
+        { requirement: 'gcc-c++' },
+      ];
+    }
+
     const cleanModuleName = packageData.name.replace(/\//g, '-').replace(/@/g, '');
     const packageName = `npmlib-${cleanModuleName}`;
 
@@ -379,6 +391,7 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLice
         manList: mapMan(tmpPath, packageData.man),
         compressedManPages,
         patches: patchlist.map((patchName, idx) => ({ patchNum: idx, patchName })),
+        extraRequires,
       };
 
       const specFileData = template(specData);

@@ -45,6 +45,10 @@ Requires:       %{name}-%{version} = %{version}-%{release}
 %package {{{version}}}
 Summary:        {{{summary}}}
 
+{{#each extraRequires}}
+Requires:       {{{requirement}}}
+{{/each}}
+
 %description {{{version}}}
 {{{description}}}
 
