@@ -121,6 +121,10 @@ ln -s %{npmlib_dir}/%{modulename}/%{version} %{buildroot}/%{nodejs_dir}/%{module
 
 %{npmlib_symlink_deps}
 
+%check
+rm -rf node_modules && %{npmlib_symlink_deps} .
+%{__nodejs} -e 'require("./")'
+
 %files
 {{#each docList}}
 %doc {{{docName}}}
