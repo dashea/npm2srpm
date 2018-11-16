@@ -49,7 +49,7 @@ BuildRequires:  {{{buildRequiresExp}}}
 BuildRequires:  /bin/gunzip
 {{/if}}
 
-Requires:       %{name}-%{version} = %{version}-%{release}
+Requires:       npmlib(%{modulename}) = %{version}
 
 %description
 {{{description}}}
