@@ -153,6 +153,7 @@ rm -rf node_modules && %{npmlib_symlink_deps} .
 %license {{{licenseName}}}
 {{/each}}
 %{npmlib_dir}/%{modulename}/%{version}
+%dir %{npmlib_dir}/%{modulename}/
 {{#if scope}}
 %dir %{npmlib_dir}/%{modulescope}
 {{/if}}
