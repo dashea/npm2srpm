@@ -240,7 +240,10 @@ function mapMan(tmpPath, man) {
     manPages: files.map((f) => {
       // if the man object was generated from directories.man, it's full of absolute
       // paths. We need those to be relative to the package directory.
-      const modulePath = path.relative(path.join(tmpPath, 'package'), f);
+      let modulePath = path.normalize(f);
+      if (path.isAbsolute(modulePath)) {
+        modulePath = path.relative(path.join(tmpPath, 'package'), modulePath);
+      }
       return { modulePath, manPath: path.basename(f), compressed: f.endsWith('.gz') };
     }),
   }));
