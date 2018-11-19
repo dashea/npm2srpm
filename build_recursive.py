@@ -22,6 +22,8 @@ COPR_PROJECT = 'npmlib-packaging'
 NPM2SRPM = 'npm2srpm'
 
 # initialize the dnf sack from the system repos
+# expire the metadata to ensure the copr stuff gets reloaded
+subprocess.check_call(["dnf", "clean", "metadata"])
 dnfBase = dnf.Base()
 dnfBase.read_all_repos()
 print("loading repo data...")
