@@ -426,6 +426,9 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLice
       // only node-gyp is supported for binary packages
       const binary = fs.existsSync(path.join(modulePath, 'binding.gyp'));
 
+      // skip %check if this package has peer dependencies, since those won't be installed
+      const check = !('peerDependencies' in packageData);
+
       // construct the data for the template
       const specData = {
         name: moduleName,
@@ -449,6 +452,7 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLice
         extraRequires,
         installScript,
         binary,
+        check,
       };
 
       const specFileData = template(specData);
