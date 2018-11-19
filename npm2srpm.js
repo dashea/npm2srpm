@@ -298,10 +298,51 @@ function patchShebang(tmpPath, modulePath) {
   return patchShebangHelper('.');
 }
 
-function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLicense) {
+function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLicense, addDep) {
+  const packageJSONPath = path.join(modulePath, 'package.json');
+
+  // If there are deps to force, add those the package.json first
+  let depPatch = null;
+  if (addDep) {
+    // Read the original package.json file
+    const packageJSONOrig = fs.readFileSync(packageJSONPath, { encoding: 'latin1' });
+    const packageJSONData = JSON.parse(packageJSONOrig);
+
+    // initialize the dependencies object if there are none already
+    if (!('dependencies' in packageJSONData)) {
+      packageJSONData.dependencies = {};
+    }
+
+    // Check if it's just one or a whole list
+    let addDepList;
+    if (typeof(addDep) === 'string') {
+      addDepList = [addDep];
+    } else {
+      addDepList = addDep;
+    }
+
+    addDepList.forEach((dep) => {
+      let [depName, depVersion] = dep.split('@');
+      if (depVersion === undefined) {
+        depVersion = '*';
+      }
+
+      packageJSONData.dependencies[depName] = depVersion;
+    });
+
+    // serialize and write out the new package.json
+    const packageJSONNew = JSON.stringify(packageJSONData, null, 2);
+    fs.writeFileSync(packageJSONPath, packageJSONNew);
+
+    // create a diff and write it to the tmpdir
+    const diffData = diff.createPatch('package.json', packageJSONOrig, packageJSONNew);
+    depPatch = 'npm2srpm-dependencies.patch';
+    fs.writeFileSync(path.join(tmpPath, depPatch), diffData);
+  }
+
   // Read the package.json file
   // use read-package-json to normalize the data
-  readPackageJSON(path.join(modulePath, 'package.json'), (err, packageData) => {
+  readPackageJSON(packageJSONPath, (err, packageData) => {
     if (err) throw err;
     // if the package has a scope, split that out
     let moduleName;
@@ -372,7 +413,10 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLice
         license = spdxToFedora(packageData);
       }
 
-      const patchlist = patchShebang(tmpPath, modulePath);
+      let patchlist = patchShebang(tmpPath, modulePath);
+      if (depPatch) {
+        patchlist.push(depPatch);
+      }
 
       let installScript = '';
       if (('scripts' in packageData) && ('install' in packageData.scripts)) {
@@ -443,7 +487,7 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLice
   });
 }
 
-function processVersion(moduleName, moduleVersion, registryData, specOnly, forceLicense) {
+function processVersion(moduleName, moduleVersion, registryData, specOnly, forceLicense, addDep) {
   // Grab and verify the dist tarball, unpack it
   tmp.dir({ unsafeCleanup: true }, (err, tmpPath) => {
     if (err) throw err;
@@ -478,13 +522,13 @@ function processVersion(moduleName, moduleVersion, registryData, specOnly, force
         // tarballs from npm will unpack into a 'package' directory
         unpackTarball(outputPath, tmpPath)
           .on('finish', () => {
-            makeSRPM(tmpPath, data.dist.tarball, path.dirname(outputPath), path.join(tmpPath, 'package'), specOnly, forceLicense);
+            makeSRPM(tmpPath, data.dist.tarball, path.dirname(outputPath), path.join(tmpPath, 'package'), specOnly, forceLicense, addDep);
           });
       });
   });
 }
 
-function processModuleRegistry(moduleName, versionMatch, registryUrl, specOnly, forceLicense) {
+function processModuleRegistry(moduleName, versionMatch, registryUrl, specOnly, forceLicense, addDep) {
   const uri = registryUrl + encodeModuleName(moduleName);
   let versions;
   let version;
@@ -497,7 +541,7 @@ function processModuleRegistry(moduleName, versionMatch, registryUrl, specOnly, 
     // find a matching version
     // start with the dist-tags
     if (versionMatch in data['dist-tags']) {
-      processVersion(moduleName, data['dist-tags'][versionMatch], data, specOnly);
+      processVersion(moduleName, data['dist-tags'][versionMatch], data, specOnly, addDep);
     } else {
       // Otherwise, treat versionMatch as a semver expression and look
       // for the greatest match
@@ -507,12 +551,12 @@ function processModuleRegistry(moduleName, versionMatch, registryUrl, specOnly, 
         throw new Error(`No version available for ${moduleName} matching ${versionMatch}`);
       }
 
-      processVersion(moduleName, version, data, specOnly, forceLicense);
+      processVersion(moduleName, version, data, specOnly, forceLicense, addDep);
     }
   });
 }
 
-function processModule(moduleName, versionMatch, isLocal, registryUrl, specOnly, forceLicense) {
+function processModule(moduleName, versionMatch, isLocal, registryUrl, specOnly, forceLicense, addDep) {
   // if this is a local module, create a new tmp directory,
   // unpack the tarball and skip to makeSRPM
   if (isLocal) {
@@ -526,11 +570,12 @@ function processModule(moduleName, versionMatch, isLocal, registryUrl, specOnly,
             path.dirname(moduleName),
             path.join(tmpPath, 'package'),
             specOnly,
-            forceLicense);
+            forceLicense,
+            addDep);
         });
     });
   } else {
-    processModuleRegistry(moduleName, versionMatch, registryUrl, specOnly, forceLicense);
+    processModuleRegistry(moduleName, versionMatch, registryUrl, specOnly, forceLicense, addDep);
   }
 }
 
@@ -562,6 +607,10 @@ async function main() {
       type: 'string',
       describe: 'Set the license string to use in the spec file',
     })
+    .option('add-dep', {
+      type: 'string',
+      describe: 'Add a dependency to package.json',
+    })
     .strict();
 
   if (argv._.length === 0) {
@@ -579,7 +628,7 @@ async function main() {
     if (!registryUrl.endsWith('/')) {
       registryUrl += '/';
     }
-    await processModule(argv._[0], argv.tag, argv.local, registryUrl, argv['spec-only'], argv['force-license']);
+    await processModule(argv._[0], argv.tag, argv.local, registryUrl, argv['spec-only'], argv['force-license'], argv['add-dep']);
   } catch (e) {
     console.error(`Error creating SRPM: ${e}`);
     process.exit(1);
