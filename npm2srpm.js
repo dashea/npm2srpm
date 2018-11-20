@@ -426,8 +426,19 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLice
       // only node-gyp is supported for binary packages
       const binary = fs.existsSync(path.join(modulePath, 'binding.gyp'));
 
+      let check = true;
       // skip %check if this package has peer dependencies, since those won't be installed
-      const check = !('peerDependencies' in packageData);
+      if (!('peerDependencies' in packageData)) {
+        check = false;
+      }
+      // if there is no entry point, also skip %check
+      // TODO assume binary packages will generate index.node until this blows
+      // up and have I figure out something better
+      if (!('main' in packageData) &&
+          !fs.existsSync(path.join(modulePath, 'index.js')) &&
+          !binary) {
+        check = false
+      }
 
       // construct the data for the template
       const specData = {
