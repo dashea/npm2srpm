@@ -315,14 +315,16 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLice
 
     // Check if it's just one or a whole list
     let addDepList;
-    if (typeof(addDep) === 'string') {
+    if (typeof (addDep) === 'string') {
       addDepList = [addDep];
     } else {
       addDepList = addDep;
     }
 
     addDepList.forEach((dep) => {
-      let [depName, depVersion] = dep.split('@');
+      const depSplit = dep.split('@');
+      const depName = depSplit[0];
+      let [, depVersion] = depSplit;
       if (depVersion === undefined) {
         depVersion = '*';
       }
@@ -413,7 +415,7 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLice
         license = spdxToFedora(packageData);
       }
 
-      let patchlist = patchShebang(tmpPath, modulePath);
+      const patchlist = patchShebang(tmpPath, modulePath);
       if (depPatch) {
         patchlist.push(depPatch);
       }
@@ -434,10 +436,10 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLice
       // if there is no entry point, also skip %check
       // TODO assume binary packages will generate index.node until this blows
       // up and have I figure out something better
-      if (!('main' in packageData) &&
-          !fs.existsSync(path.join(modulePath, 'index.js')) &&
-          !binary) {
-        check = false
+      if (!('main' in packageData)
+          && !fs.existsSync(path.join(modulePath, 'index.js'))
+          && !binary) {
+        check = false;
       }
 
       // construct the data for the template
