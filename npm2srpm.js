@@ -430,7 +430,7 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLice
 
       let check = true;
       // skip %check if this package has peer dependencies, since those won't be installed
-      if (!('peerDependencies' in packageData)) {
+      if ('peerDependencies' in packageData) {
         check = false;
       }
       // if there is no entry point, also skip %check
