@@ -9,7 +9,7 @@ import tempfile
 import threading
 import time
 
-from typing import Dict, List, Optional   # pylint: disable=unused-import
+from typing import Dict, List, Optional, Tuple  # pylint: disable=unused-import
 
 from copr.v3 import Client  # type: ignore
 import dnf                  # type: ignore
@@ -40,22 +40,33 @@ coprClient = Client.create_from_config_file()
 inProgress = {}     # type: Dict[str, Dict[str, threading.Event]]
 inProgressLock = threading.Lock()
 
-def processSRPM(path: str, tmpobj: Optional[tempfile.TemporaryDirectory]=None) -> threading.Thread:
-    deplist = [] # type: List[threading.Thread]
-
-    # Read the rpm header for the npmlib requirements
+def getRPMHdr(path: str) -> rpm.hdr:
     ts = rpm.TransactionSet()
     fdno = os.open(path, os.O_RDONLY)
     hdr = ts.hdrFromFdno(fdno)
     os.close(fdno)
 
-    rpmName = hdr[rpm.RPMTAG_NAME].decode('ascii')[7:]
-    moduleVersion = hdr[rpm.RPMTAG_VERSION].decode('ascii')
-    pkgEvent = threading.Event()
-    with inProgressLock:    # pylint: disable=not-context-manager
-        if rpmName not in inProgress:
-            inProgress[rpmName] = {}
-        inProgress[rpmName][moduleVersion] = pkgEvent
+    return hdr
+
+def getNV(hdr: rpm.hdr) -> Tuple[str, str]:
+    # return the name with npmlib- stripped off
+    return (hdr[rpm.RPMTAG_NAME].decode('ascii')[7:],
+            hdr[rpm.RPMTAG_VERSION].decode('ascii'))
+
+def processSRPM(path: str, tmpobj: Optional[tempfile.TemporaryDirectory]=None,
+        pkgEvent: Optional[threading.Event]=None) -> threading.Thread:
+    deplist = [] # type: List[threading.Thread]
+
+    hdr = getRPMHdr(path)
+
+    # If no event was passed in for this SRPM, create one and add it to the dict
+    if pkgEvent is None:
+        (moduleName, moduleVersion) = getNV(hdr)
+        pkgEvent = threading.Event()
+        with inProgressLock:    # pylint: disable=not-context-manager
+            if moduleName not in inProgress:
+                inProgress[moduleName] = {}
+            inProgress[moduleName][moduleVersion] = pkgEvent
 
     # Convert the requirements from binary to str, and drop any that aren't npmlib(whatever)
     reqs = (s.decode('ascii') for s in hdr[rpm.RPMTAG_REQUIRES] if b'npmlib(' in s)
@@ -68,7 +79,6 @@ def processSRPM(path: str, tmpobj: Optional[tempfile.TemporaryDirectory]=None) -
 
         # Look for the package in the pending versions
         moduleName = re.search(r'npmlib\(([^)]*)\)', req)[1]
-        event = None
 
         # Mangle the npm name into an rpm name
         rpmName = re.sub(r'/', '-', moduleName)
@@ -87,13 +97,37 @@ def processSRPM(path: str, tmpobj: Optional[tempfile.TemporaryDirectory]=None) -
             reqSemver = re.sub(r' or ', ' || ', reqSemver)
             reqSemver = re.sub(r'[()]', '', reqSemver)
 
+        event = None
+        depEvent = None
+        tempdir = None
+        depRPM = ''
+
         # pylint doesn't understand locks, at least as of version 1.7.5
         with inProgressLock:    # pylint: disable=not-context-manager
-            if rpmName in inProgress:
+            if rpmname in inProgress:
                 for version in inProgress[rpmName].keys():
                     if semver.satisfies(version, reqSemver):
                         event = inProgress[rpmName][version]
                         break
+
+            # if no event was found, create one add add it to the dict
+            # while we still have the lock held
+            if not event:
+                # Make the rpm first to figure out the version
+                tempdir = tempfile.TemporaryDirectory()
+                args = [NPM2SRPM]
+                if reqSemver:
+                    args += ['-t', reqSemver]
+                args += moduleName
+                subprocess.check_call(args, cwd=tempdir.name)
+                depRPM = glob.glob(os.path.join(tempdir.name, '*.rpm'))[0]
+                depHdr = getRPMHdr(depRPM)
+                (reqName, reqVer) = getNV(depHdr)
+
+                depEvent = threading.Event()
+                if reqName not in inProgress:
+                    inProgress[reqName] = {}
+                inProgress[reqName][reqVer] = depEvent
 
         if event:
             def _wait(event):
@@ -104,15 +138,7 @@ def processSRPM(path: str, tmpobj: Optional[tempfile.TemporaryDirectory]=None) -
             waitThread.start()
             deplist.append(waitThread)
         else:
-            tempdir = tempfile.TemporaryDirectory()
-
-            args = [NPM2SRPM]
-            if reqSemver:
-                args += ['-t', reqSemver]
-            args += [moduleName]
-
-            subprocess.check_call(args, cwd=tempdir.name)
-            deplist.append(processSRPM(glob.glob(os.path.join(tempdir.name, '*.rpm'))[0], tempdir))
+            deplist.append(processSRPM(depRPM, tempdir, depEvent))
 
     def _do_build(depThreads, tmpobj, eventObj):
         # wait for all of the dependent jobs to finish
