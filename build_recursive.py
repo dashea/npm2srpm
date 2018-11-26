@@ -49,13 +49,13 @@ def processSRPM(path: str, tmpobj: Optional[tempfile.TemporaryDirectory]=None) -
     hdr = ts.hdrFromFdno(fdno)
     os.close(fdno)
 
-    moduleName = hdr[rpm.RPMTAG_NAME].decode('ascii')[7:]
+    rpmName = hdr[rpm.RPMTAG_NAME].decode('ascii')[7:]
     moduleVersion = hdr[rpm.RPMTAG_VERSION].decode('ascii')
     pkgEvent = threading.Event()
     with inProgressLock:    # pylint: disable=not-context-manager
-        if moduleName not in inProgress:
-            inProgress[moduleName] = {}
-        inProgress[moduleName][moduleVersion] = pkgEvent
+        if rpmName not in inProgress:
+            inProgress[rpmName] = {}
+        inProgress[rpmName][moduleVersion] = pkgEvent
 
     # Convert the requirements from binary to str, and drop any that aren't npmlib(whatever)
     reqs = (s.decode('ascii') for s in hdr[rpm.RPMTAG_REQUIRES] if b'npmlib(' in s)
@@ -69,6 +69,10 @@ def processSRPM(path: str, tmpobj: Optional[tempfile.TemporaryDirectory]=None) -
         # Look for the package in the pending versions
         moduleName = re.search(r'npmlib\(([^)]*)\)', req)[1]
         event = None
+
+        # Mangle the npm name into an rpm name
+        rpmName = re.sub(r'/', '-', moduleName)
+        rpmName = re.sub(r'@', '', rpmName)
 
         # convert the RPM boolean back to a semver-ish string by removing the npmlib(whatever) identifiers,
         # removing the spaces between operators and version numbers, replacing ' with ' with ' ', replacing
@@ -85,10 +89,10 @@ def processSRPM(path: str, tmpobj: Optional[tempfile.TemporaryDirectory]=None) -
 
         # pylint doesn't understand locks, at least as of version 1.7.5
         with inProgressLock:    # pylint: disable=not-context-manager
-            if moduleName in inProgress:
-                for version in inProgress[moduleName].keys():
+            if rpmName in inProgress:
+                for version in inProgress[rpmName].keys():
                     if semver.satisfies(version, reqSemver):
-                        event = inProgress[moduleName][version]
+                        event = inProgress[rpmName][version]
                         break
 
         if event:
