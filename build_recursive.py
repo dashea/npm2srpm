@@ -14,8 +14,7 @@ from typing import Dict, List, Optional, Tuple  # pylint: disable=unused-import
 from copr.v3 import Client  # type: ignore
 import dnf                  # type: ignore
 import rpm                  # type: ignore
-# needs to be node-semver
-import semver               # type: ignore
+import semantic_version     # type: ignore
 
 COPR_OWNER = 'dshea'
 COPR_PROJECT = 'npmlib-packaging'
@@ -84,18 +83,31 @@ def processSRPM(path: str, tmpobj: Optional[tempfile.TemporaryDirectory]=None,
         rpmName = re.sub(r'/', '-', moduleName)
         rpmName = re.sub(r'@', '', rpmName)
 
-        # convert the RPM boolean back to a semver-ish string by removing the npmlib(whatever) identifiers,
-        # removing the spaces between operators and version numbers, replacing ' with ' with ' ', replacing
-        # ' or ' with ' || ', and dropping all grouping parenthesis
-        # if there is no operator in the expression, then there is no version
+        # convert the RPM boolean into something semverish. semantic_version.Spec can handle AND
+        # expressions (the 'with' expressions in RPM-ese). To handle OR, build a list of AND
+        # Specs (which we can do by splitting on ' or ' since the expression is already
+        # disjunctive normal form).
+        # In addition to that, strip out the 'npmlib(...)' identifiers, remove spaces between
+        # operators and version numbers, and drop all of the parenthesis
+
+        # if there is no operator in the expression, then any version satisifies
         if not re.search(r'[<>=]', req):
-            reqSemver = None
+            reqSemvers = [semantic_version.Spec('*')]
         else:
-            reqSemver = re.sub(r'npmlib\([^)]*\) ', '', req)
-            reqSemver = re.sub(r'([<>=]) ', r'\1', reqSemver)
-            reqSemver = re.sub(r' with ', ' ', reqSemver)
-            reqSemver = re.sub(r' or ', ' || ', reqSemver)
-            reqSemver = re.sub(r'[()]', '', reqSemver)
+            reqSemverExp = re.sub(r'npmlib\([^)]*\) ', '', req)
+            reqSemverExp = re.sub(r'([<>=]) ', r'\1', reqSemverExp)
+            reqSemverExp = re.sub(r'[()]', '', reqSemverExp)
+
+            orList = reqSemverExp.split(' or ')
+            # semantic_version.Spec parses 'x,y' as x AND y
+            andList = map(lambda s: re.sub(' with ', ',', s), orList)
+            
+            # convert to a list since we need it potentially multiple times
+            reqSemvers = list(map(semantic_version.Spec, andList))
+
+        # convert the list of semantic_version specs to a npm-semver expression string.
+        # the commas used for AND become spaces, separate ORs with ' || '
+        semverArg = ' || '.join(map(lambda spec: re.sub(',', ' ', str(spec)), reqSemvers))
 
         event = None
         depEvent = None
@@ -106,7 +118,9 @@ def processSRPM(path: str, tmpobj: Optional[tempfile.TemporaryDirectory]=None,
         with inProgressLock:    # pylint: disable=not-context-manager
             if rpmname in inProgress:
                 for version in inProgress[rpmName].keys():
-                    if semver.satisfies(version, reqSemver):
+                    v = semantic_version.Version(version)
+                    # ignore the pylint warning, this does the right thing
+                    if any(map(lambda spec: spec.match(v), reqSemvers)):    # pylint: disable=cell-var-from-loop
                         event = inProgress[rpmName][version]
                         break
 
@@ -115,10 +129,7 @@ def processSRPM(path: str, tmpobj: Optional[tempfile.TemporaryDirectory]=None,
             if not event:
                 # Make the rpm first to figure out the version
                 tempdir = tempfile.TemporaryDirectory(prefix="npm2srpm.")
-                args = [NPM2SRPM]
-                if reqSemver:
-                    args += ['-t', reqSemver]
-                args += moduleName
+                args = [NPM2SRPM, '-t', semverArg, moduleName]
                 subprocess.check_call(args, cwd=tempdir.name)
                 depRPM = glob.glob(os.path.join(tempdir.name, '*.rpm'))[0]
                 depHdr = getRPMHdr(depRPM)
