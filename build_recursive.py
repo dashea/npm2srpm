@@ -114,7 +114,7 @@ def processSRPM(path: str, tmpobj: Optional[tempfile.TemporaryDirectory]=None,
             # while we still have the lock held
             if not event:
                 # Make the rpm first to figure out the version
-                tempdir = tempfile.TemporaryDirectory()
+                tempdir = tempfile.TemporaryDirectory(prefix="npm2srpm.")
                 args = [NPM2SRPM]
                 if reqSemver:
                     args += ['-t', reqSemver]
