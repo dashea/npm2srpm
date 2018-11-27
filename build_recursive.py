@@ -62,7 +62,7 @@ def processSRPM(path: str, tmpobj: Optional[tempfile.TemporaryDirectory]=None,
     if pkgEvent is None:
         (moduleName, moduleVersion) = getNV(hdr)
         pkgEvent = threading.Event()
-        with inProgressLock:    # pylint: disable=not-context-manager
+        with inProgressLock:
             if moduleName not in inProgress:
                 inProgress[moduleName] = {}
             inProgress[moduleName][moduleVersion] = pkgEvent
@@ -115,8 +115,8 @@ def processSRPM(path: str, tmpobj: Optional[tempfile.TemporaryDirectory]=None,
         depRPM = ''
 
         # pylint doesn't understand locks, at least as of version 1.7.5
-        with inProgressLock:    # pylint: disable=not-context-manager
-            if rpmname in inProgress:
+        with inProgressLock:
+            if rpmName in inProgress:
                 for version in inProgress[rpmName].keys():
                     v = semantic_version.Version(version)
                     # ignore the pylint warning, this does the right thing
