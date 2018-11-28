@@ -107,7 +107,8 @@ def processSRPM(path: str, tmpobj: Optional[tempfile.TemporaryDirectory]=None,
 
         # convert the list of semantic_version specs to a npm-semver expression string.
         # the commas used for AND become spaces, separate ORs with ' || '
-        semverArg = ' || '.join(map(lambda spec: re.sub(',', ' ', str(spec)), reqSemvers))
+        # semantic_version likes to use '==' when converting to a string, remove that
+        semverArg = ' || '.join(map(lambda spec: re.sub('==', '', re.sub(',', ' ', str(spec))), reqSemvers))
 
         event = None
         depEvent = None
