@@ -52,6 +52,30 @@ const csvFile = 'spdx_to_fedora.csv';
 const csvData = fs.readFileSync(path.join(__dirname, csvFile));
 const licenseRecords = csvParseSync(csvData, { columns: true });
 
+// Normalize arguments that are expected multiple times into an array
+// If the argument is specified 0 times, yargs will set undefined,
+// if the argument is specified 1 time, yargs will set the type of the
+// argument (string, boolean, etc), and if more than 1 time yargs will set an array.
+// Make all of these cases an array.
+function normalizeArgList(opt) {
+  if (typeof (opt) === 'undefined') {
+    return [];
+  }
+
+  if (Array.isArray(opt)) {
+    return opt;
+  }
+
+  return [opt];
+}
+
+// Enforce that an argument is specified only 0 or 1 times
+function enforceSingleArg(opt, optName) {
+  if (!((typeof (opt) === 'undefined') || !Array.isArray(opt))) {
+    throw new Error(`${optName} can only specified once`);
+  }
+}
+
 function unpackTarball(tarball, dest) {
   const gunzip = zlib.createGunzip();
   return fs.createReadStream(tarball).pipe(gunzip).pipe(tar.extract(dest));
@@ -298,12 +322,12 @@ function patchShebang(tmpPath, modulePath) {
   return patchShebangHelper('.');
 }
 
-function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLicense, addDep) {
+function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, opts) {
   const packageJSONPath = path.join(modulePath, 'package.json');
 
   // If there are deps to force, add those the package.json first
   let depPatch = null;
-  if (addDep) {
+  if (opts.addDeps) {
     // Read the original package.json file
     const packageJSONOrig = fs.readFileSync(packageJSONPath, { encoding: 'latin1' });
     const packageJSONData = JSON.parse(packageJSONOrig);
@@ -313,15 +337,7 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLice
       packageJSONData.dependencies = {};
     }
 
-    // Check if it's just one or a whole list
-    let addDepList;
-    if (typeof (addDep) === 'string') {
-      addDepList = [addDep];
-    } else {
-      addDepList = addDep;
-    }
-
-    addDepList.forEach((dep) => {
+    opts.addDeps.forEach((dep) => {
       const depSplit = dep.split('@');
       const depName = depSplit[0];
       let [, depVersion] = depSplit;
@@ -409,8 +425,8 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLice
         .some(section => section.manPages.some(page => page.compressed));
 
       let license;
-      if (forceLicense) {
-        license = forceLicense;
+      if (opts.forceLicense) {
+        license = opts.forceLicense;
       } else {
         license = spdxToFedora(packageData);
       }
@@ -472,7 +488,7 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLice
       const specFilePath = `${packageName}.spec`;
 
       // if only the spec file is requested, just write it to the current directory
-      if (specOnly) {
+      if (opts.specOnly) {
         fs.writeFile(specFilePath, specFileData, { encoding: 'utf-8' }, (writeErr) => {
           if (writeErr) throw writeErr;
           console.log(`Wrote: ${specFilePath}`);
@@ -504,7 +520,7 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, specOnly, forceLice
   });
 }
 
-function processVersion(moduleName, moduleVersion, registryData, specOnly, forceLicense, addDep) {
+function processVersion(moduleName, moduleVersion, registryData, opts) {
   // Grab and verify the dist tarball, unpack it
   tmp.dir({ unsafeCleanup: true }, (err, tmpPath) => {
     if (err) throw err;
@@ -539,14 +555,14 @@ function processVersion(moduleName, moduleVersion, registryData, specOnly, force
         // tarballs from npm will unpack into a 'package' directory
         unpackTarball(outputPath, tmpPath)
           .on('finish', () => {
-            makeSRPM(tmpPath, data.dist.tarball, path.dirname(outputPath), path.join(tmpPath, 'package'), specOnly, forceLicense, addDep);
+            makeSRPM(tmpPath, data.dist.tarball, path.dirname(outputPath), path.join(tmpPath, 'package'), opts);
           });
       });
   });
 }
 
-function processModuleRegistry(moduleName, versionMatch, registryUrl, specOnly, forceLicense, addDep) {
-  const uri = registryUrl + encodeModuleName(moduleName);
+function processModuleRegistry(moduleName, versionMatch, opts) {
+  const uri = opts.registryUrl + encodeModuleName(moduleName);
   let versions;
   let version;
 
@@ -558,7 +574,7 @@ function processModuleRegistry(moduleName, versionMatch, registryUrl, specOnly, 
     // find a matching version
     // start with the dist-tags
     if (versionMatch in data['dist-tags']) {
-      processVersion(moduleName, data['dist-tags'][versionMatch], data, specOnly, addDep);
+      processVersion(moduleName, data['dist-tags'][versionMatch], data, opts);
     } else {
       // Otherwise, treat versionMatch as a semver expression and look
       // for the greatest match
@@ -568,15 +584,15 @@ function processModuleRegistry(moduleName, versionMatch, registryUrl, specOnly, 
         throw new Error(`No version available for ${moduleName} matching ${versionMatch}`);
       }
 
-      processVersion(moduleName, version, data, specOnly, forceLicense, addDep);
+      processVersion(moduleName, version, data, opts);
     }
   });
 }
 
-function processModule(moduleName, versionMatch, isLocal, registryUrl, specOnly, forceLicense, addDep) {
+function processModule(moduleName, versionMatch, opts) {
   // if this is a local module, create a new tmp directory,
   // unpack the tarball and skip to makeSRPM
-  if (isLocal) {
+  if (opts.isLocal) {
     tmp.dir({ unsafeCleanup: true }, (err, tmpPath) => {
       if (err) throw err;
 
@@ -586,13 +602,11 @@ function processModule(moduleName, versionMatch, isLocal, registryUrl, specOnly,
             path.basename(moduleName),
             path.dirname(moduleName),
             path.join(tmpPath, 'package'),
-            specOnly,
-            forceLicense,
-            addDep);
+            opts);
         });
     });
   } else {
-    processModuleRegistry(moduleName, versionMatch, registryUrl, specOnly, forceLicense, addDep);
+    processModuleRegistry(moduleName, versionMatch, opts);
   }
 }
 
@@ -640,12 +654,34 @@ async function main() {
     process.exit(1);
   }
 
+  // make sure the arguments that make sense only once are only specified once
+  enforceSingleArg(argv.tag, '--tag');
+  enforceSingleArg(argv.local, '--local');
+  enforceSingleArg(argv.registry, '--registry');
+  enforceSingleArg(argv['spec-only'], '--spec-only');
+  enforceSingleArg(argv['force-license'], '--force-license');
+
+  // for cli arguments specified multiple times, yargs will create an array of strings.
+  // if the argument is only specified once, yargs will create a string.
+  // for arguments we expect multiple times, make the type consistent
+  const addDeps = normalizeArgList(argv['add-dep']);
+
+  // make sure the registry URL ends with a / so we can append stuff to it
+  let registryUrl = argv.registry;
+  if (!registryUrl.endsWith('/')) {
+    registryUrl += '/';
+  }
+
+  const opts = {
+    isLocal: argv.local,
+    registryUrl,
+    specOnly: argv['spec-only'],
+    forceLicense: argv['force-license'],
+    addDeps,
+  };
+
   try {
-    let registryUrl = argv.registry;
-    if (!registryUrl.endsWith('/')) {
-      registryUrl += '/';
-    }
-    await processModule(argv._[0], argv.tag, argv.local, registryUrl, argv['spec-only'], argv['force-license'], argv['add-dep']);
+    await processModule(argv._[0], argv.tag, opts);
   } catch (e) {
     console.error(`Error creating SRPM: ${e}`);
     process.exit(1);
