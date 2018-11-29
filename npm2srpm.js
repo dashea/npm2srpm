@@ -464,6 +464,7 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, opts) {
         scope: moduleScope,
         packageName,
         version: packageData.version,
+        release: opts.release,
         summary: packageData.description.split('\n')[0],
         description: packageData.description,
         license,
@@ -642,6 +643,11 @@ async function main() {
       type: 'string',
       describe: 'Add a dependency to package.json',
     })
+    .option('release', {
+      type: 'string',
+      default: '1',
+      describe: 'Specify the release version to use in the RPM',
+    })
     .strict();
 
   if (argv._.length === 0) {
@@ -660,6 +666,7 @@ async function main() {
   enforceSingleArg(argv.registry, '--registry');
   enforceSingleArg(argv['spec-only'], '--spec-only');
   enforceSingleArg(argv['force-license'], '--force-license');
+  enforceSingleArg(argv.release, '--release');
 
   // for cli arguments specified multiple times, yargs will create an array of strings.
   // if the argument is only specified once, yargs will create a string.
@@ -678,6 +685,7 @@ async function main() {
     specOnly: argv['spec-only'],
     forceLicense: argv['force-license'],
     addDeps,
+    release: argv.release,
   };
 
   try {
