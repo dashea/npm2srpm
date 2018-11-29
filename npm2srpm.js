@@ -445,14 +445,16 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, opts) {
       const binary = fs.existsSync(path.join(modulePath, 'binding.gyp'));
 
       let check = true;
-      // skip %check if this package has peer dependencies, since those won't be installed
-      if ('peerDependencies' in packageData) {
+      // see if %check is explicitly disabled
+      if (opts.disableCheck) {
         check = false;
-      }
+      // skip %check if this package has peer dependencies, since those won't be installed
+      } else if ('peerDependencies' in packageData) {
+        check = false;
       // if there is no entry point, also skip %check
       // TODO assume binary packages will generate index.node until this blows
       // up and have I figure out something better
-      if (!('main' in packageData)
+      } else if (!('main' in packageData)
           && !fs.existsSync(path.join(modulePath, 'index.js'))
           && !binary) {
         check = false;
@@ -655,6 +657,11 @@ async function main() {
       default: '1',
       describe: 'Specify the release version to use in the RPM',
     })
+    .option('disable-check', {
+      type: 'boolean',
+      default: false,
+      describe: 'Disable %check',
+    })
     // for cli arguments specified multiple times, yargs will create an array of strings.
     // if the argument is only specified once, yargs will create a string.
     // for arguments we expect multiple times, make the type consistent
@@ -669,6 +676,7 @@ async function main() {
       enforceSingleArg(args['spec-only'], '--spec-only');
       enforceSingleArg(args['force-license'], '--force-license');
       enforceSingleArg(args.release, '--release');
+      enforceSingleArg(args['disable-check'], '--disable-check');
 
       // ensure there is exactly one module name
       if (args._.length === 0) {
@@ -690,6 +698,7 @@ async function main() {
     forceLicense: argv['force-license'],
     addDeps: argv['add-dep'],
     release: argv.release,
+    disableCheck: argv['disable-check'],
   };
 
   try {
