@@ -630,6 +630,13 @@ async function main() {
       default: 'https://registry.npmjs.org/',
       describe: 'Base URL of the npm registry to use',
     })
+    .coerce('registry', (registry) => {
+      // ensure the URL ends with a / so we can append stuff to it
+      if (registry.endsWith('/')) {
+        return registry;
+      }
+      return `${registry}/`;
+    })
     .option('spec-only', {
       type: 'boolean',
       default: false,
@@ -648,43 +655,40 @@ async function main() {
       default: '1',
       describe: 'Specify the release version to use in the RPM',
     })
+    // for cli arguments specified multiple times, yargs will create an array of strings.
+    // if the argument is only specified once, yargs will create a string.
+    // for arguments we expect multiple times, make the type consistent
+    .coerce({
+      'add-dep': normalizeArgList,
+    })
+    .check((args) => {
+      // make sure the arguments that make sense only once are only specified once
+      enforceSingleArg(args.tag, '--tag');
+      enforceSingleArg(args.local, '--local');
+      enforceSingleArg(args.registry, '--registry');
+      enforceSingleArg(args['spec-only'], '--spec-only');
+      enforceSingleArg(args['force-license'], '--force-license');
+      enforceSingleArg(args.release, '--release');
+
+      // ensure there is exactly one module name
+      if (args._.length === 0) {
+        throw new Error('You must specify a module name');
+      }
+
+      if (args._.length > 1) {
+        throw new Error('Only one module can be specified');
+      }
+
+      return true;
+    })
     .strict();
-
-  if (argv._.length === 0) {
-    console.error('You must specify a module name');
-    process.exit(1);
-  }
-
-  if (argv._.length > 1) {
-    console.error('Only one module can be specified');
-    process.exit(1);
-  }
-
-  // make sure the arguments that make sense only once are only specified once
-  enforceSingleArg(argv.tag, '--tag');
-  enforceSingleArg(argv.local, '--local');
-  enforceSingleArg(argv.registry, '--registry');
-  enforceSingleArg(argv['spec-only'], '--spec-only');
-  enforceSingleArg(argv['force-license'], '--force-license');
-  enforceSingleArg(argv.release, '--release');
-
-  // for cli arguments specified multiple times, yargs will create an array of strings.
-  // if the argument is only specified once, yargs will create a string.
-  // for arguments we expect multiple times, make the type consistent
-  const addDeps = normalizeArgList(argv['add-dep']);
-
-  // make sure the registry URL ends with a / so we can append stuff to it
-  let registryUrl = argv.registry;
-  if (!registryUrl.endsWith('/')) {
-    registryUrl += '/';
-  }
 
   const opts = {
     isLocal: argv.local,
-    registryUrl,
+    registryUrl: argv.registry,
     specOnly: argv['spec-only'],
     forceLicense: argv['force-license'],
-    addDeps,
+    addDeps: argv['add-dep'],
     release: argv.release,
   };
 
