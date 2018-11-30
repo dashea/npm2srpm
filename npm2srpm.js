@@ -21,23 +21,21 @@ const csvParseSync = require('csv-parse/lib/sync');
 const crypto = require('crypto');
 const dateformat = require('dateformat');
 const diff = require('diff');
+const fetch = require('node-fetch');
 const fs = require('fs');
 const handlebars = require('handlebars');
+const npmFetch = require('npm-registry-fetch');
 const path = require('path');
 const readPackageJSON = require('read-package-json');
-const request = require('request');
 const semver = require('semver');
 const spdxCorrect = require('spdx-correct');
 const spdxParse = require('spdx-expression-parse');
 const stream = require('stream');
-const tar = require('tar-fs');
+const tar = require('tar');
 const tmp = require('tmp');
 const url = require('url');
 const yargs = require('yargs');
-const zlib = require('zlib');
-const RegClient = require('silent-npm-registry-client');
 
-const npmClient = new RegClient();
 const npmClientConf = { timeout: 1000 };
 
 tmp.setGracefulCleanup();
@@ -51,6 +49,18 @@ const template = handlebars.compile(templateData);
 const csvFile = 'spdx_to_fedora.csv';
 const csvData = fs.readFileSync(path.join(__dirname, csvFile));
 const licenseRecords = csvParseSync(csvData, { columns: true });
+
+function readPackageJSONPromise(packageJSONPath) {
+  return new Promise((resolve, reject) => {
+    readPackageJSON(packageJSONPath, (err, packageData) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve(packageData);
+      }
+    });
+  });
+}
 
 // Normalize arguments that are expected multiple times into an array
 // If the argument is specified 0 times, yargs will set undefined,
@@ -77,8 +87,7 @@ function enforceSingleArg(opt, optName) {
 }
 
 function unpackTarball(tarball, dest) {
-  const gunzip = zlib.createGunzip();
-  return fs.createReadStream(tarball).pipe(gunzip).pipe(tar.extract(dest));
+  return tar.x({ file: tarball, cwd: dest });
 }
 
 function encodeModuleName(moduleName) {
@@ -322,7 +331,7 @@ function patchShebang(tmpPath, modulePath) {
   return patchShebangHelper('.');
 }
 
-function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, opts) {
+async function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, opts) {
   const packageJSONPath = path.join(modulePath, 'package.json');
 
   // If there are deps to force, add those the package.json first
@@ -360,254 +369,238 @@ function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, opts) {
 
   // Read the package.json file
   // use read-package-json to normalize the data
-  readPackageJSON(packageJSONPath, (err, packageData) => {
-    if (err) throw err;
-    // if the package has a scope, split that out
-    let moduleName;
-    let moduleScope;
-    if (packageData.name.indexOf('/') !== -1) {
-      [moduleScope, moduleName] = packageData.name.split('/');
-    } else {
-      moduleName = packageData.name;
-      moduleScope = '';
+  const packageData = await readPackageJSONPromise(packageJSONPath);
+
+  // if the package has a scope, split that out
+  let moduleName;
+  let moduleScope;
+  if (packageData.name.indexOf('/') !== -1) {
+    [moduleScope, moduleName] = packageData.name.split('/');
+  } else {
+    moduleName = packageData.name;
+    moduleScope = '';
+  }
+
+  // node-gyp has extra requirements not encoded in package.json.
+  // hardcode those here
+  let extraRequires = [];
+  if (moduleName === 'node-gyp') {
+    extraRequires = [
+      { requirement: 'python2' },
+      { requirement: 'make' },
+      { requirement: 'gcc' },
+      { requirement: 'gcc-c++' },
+    ];
+  }
+
+  const cleanModuleName = packageData.name.replace(/\//g, '-').replace(/@/g, '');
+  const packageName = `npmlib-${cleanModuleName}`;
+
+  // Read the package directory for the top-level filenames, split them
+  // up by license, doc, other
+  const packageList = fs.readdirSync(modulePath);
+  const docList = [];
+  const licenseList = [];
+  const fileList = [];
+
+  packageList.forEach((fileName) => {
+    // ignore node_modules if present
+    if (fileName !== 'node_modules') {
+      if (fileName.match(/\.txt$|\.md$|authors|readme|contributing|docs/i)) {
+        docList.push({ docName: fileName });
+      } else if (fileName.match(/license|copying/i)) {
+        licenseList.push({ licenseName: fileName });
+      } else {
+        fileList.push({ fileName });
+      }
     }
+  });
 
-    // node-gyp has extra requirements not encoded in package.json.
-    // hardcode those here
-    let extraRequires = [];
-    if (moduleName === 'node-gyp') {
-      extraRequires = [
-        { requirement: 'python2' },
-        { requirement: 'make' },
-        { requirement: 'gcc' },
-        { requirement: 'gcc-c++' },
-      ];
-    }
+  // if no homepage is present in package.json, try repo
+  let packageUrl;
+  if (packageData.homepage) {
+    packageUrl = packageData.homepage;
+  } else if (packageData.repository) {
+    packageUrl = packageData.repository.url;
+  } else {
+    packageUrl = null;
+  }
 
-    const cleanModuleName = packageData.name.replace(/\//g, '-').replace(/@/g, '');
-    const packageName = `npmlib-${cleanModuleName}`;
+  const manList = mapMan(tmpPath, packageData.man);
+  // whether any man pages included in npm-library are compressed
+  const compressedManPages = manList
+    .some(section => section.manPages.some(page => page.compressed));
 
-    // Read the package directory for the top-level filenames, split them
-    // up by license, doc, other
-    fs.readdir(modulePath, (dirErr, packageList) => {
-      if (dirErr) throw dirErr;
+  let license;
+  if (opts.forceLicense) {
+    license = opts.forceLicense;
+  } else {
+    license = spdxToFedora(packageData);
+  }
 
-      const docList = [];
-      const licenseList = [];
-      const fileList = [];
+  const patchlist = patchShebang(tmpPath, modulePath);
+  if (depPatch) {
+    patchlist.push(depPatch);
+  }
 
-      packageList.forEach((fileName) => {
-        // ignore node_modules if present
-        if (fileName !== 'node_modules') {
-          if (fileName.match(/\.txt$|\.md$|authors|readme|contributing|docs/i)) {
-            docList.push({ docName: fileName });
-          } else if (fileName.match(/license|copying/i)) {
-            licenseList.push({ licenseName: fileName });
-          } else {
-            fileList.push({ fileName });
-          }
-        }
-      });
+  let installScript = '';
+  if (('scripts' in packageData) && ('install' in packageData.scripts)) {
+    installScript = packageData.scripts.install;
+  }
 
-      // if no homepage is present in package.json, try repo
-      let packageUrl;
-      if (packageData.homepage) {
-        packageUrl = packageData.homepage;
-      } else if (packageData.repository) {
-        packageUrl = packageData.repository.url;
-      } else {
-        packageUrl = null;
-      }
+  // only node-gyp is supported for binary packages
+  const binary = fs.existsSync(path.join(modulePath, 'binding.gyp'));
 
-      const manList = mapMan(tmpPath, packageData.man);
-      // whether any man pages included in npm-library are compressed
-      const compressedManPages = manList
-        .some(section => section.manPages.some(page => page.compressed));
+  let check = true;
+  // see if %check is explicitly disabled
+  if (opts.disableCheck) {
+    check = false;
+  // skip %check if this package has peer dependencies, since those won't be installed
+  } else if ('peerDependencies' in packageData) {
+    check = false;
+  // if there is no entry point, also skip %check
+  // TODO assume binary packages will generate index.node until this blows
+  // up and have I figure out something better
+  } else if (!('main' in packageData)
+      && !fs.existsSync(path.join(modulePath, 'index.js'))
+      && !binary) {
+    check = false;
+  }
 
-      let license;
-      if (opts.forceLicense) {
-        license = opts.forceLicense;
-      } else {
-        license = spdxToFedora(packageData);
-      }
+  // construct the data for the template
+  const specData = {
+    name: moduleName,
+    scope: moduleScope,
+    packageName,
+    version: packageData.version,
+    release: opts.release,
+    summary: packageData.description.split('\n')[0],
+    description: packageData.description,
+    license,
+    url: packageUrl,
+    sourceUrl,
+    buildRequires: depsToBuildReqs(packageData.dependencies),
+    binList: mapBin(packageData.bin),
+    cldate: dateformat(Date(), 'ddd mmm d yyyy'),
+    fileList,
+    docList,
+    licenseList,
+    manList: mapMan(tmpPath, packageData.man),
+    compressedManPages,
+    patches: patchlist.map((patchName, idx) => ({ patchNum: idx, patchName })),
+    extraRequires,
+    installScript,
+    binary,
+    check,
+  };
 
-      const patchlist = patchShebang(tmpPath, modulePath);
-      if (depPatch) {
-        patchlist.push(depPatch);
-      }
+  const specFileData = template(specData);
+  const specFilePath = `${packageName}.spec`;
 
-      let installScript = '';
-      if (('scripts' in packageData) && ('install' in packageData.scripts)) {
-        installScript = packageData.scripts.install;
-      }
-
-      // only node-gyp is supported for binary packages
-      const binary = fs.existsSync(path.join(modulePath, 'binding.gyp'));
-
-      let check = true;
-      // see if %check is explicitly disabled
-      if (opts.disableCheck) {
-        check = false;
-      // skip %check if this package has peer dependencies, since those won't be installed
-      } else if ('peerDependencies' in packageData) {
-        check = false;
-      // if there is no entry point, also skip %check
-      // TODO assume binary packages will generate index.node until this blows
-      // up and have I figure out something better
-      } else if (!('main' in packageData)
-          && !fs.existsSync(path.join(modulePath, 'index.js'))
-          && !binary) {
-        check = false;
-      }
-
-      // construct the data for the template
-      const specData = {
-        name: moduleName,
-        scope: moduleScope,
-        packageName,
-        version: packageData.version,
-        release: opts.release,
-        summary: packageData.description.split('\n')[0],
-        description: packageData.description,
-        license,
-        url: packageUrl,
-        sourceUrl,
-        buildRequires: depsToBuildReqs(packageData.dependencies),
-        binList: mapBin(packageData.bin),
-        cldate: dateformat(Date(), 'ddd mmm d yyyy'),
-        fileList,
-        docList,
-        licenseList,
-        manList: mapMan(tmpPath, packageData.man),
-        compressedManPages,
-        patches: patchlist.map((patchName, idx) => ({ patchNum: idx, patchName })),
-        extraRequires,
-        installScript,
-        binary,
-        check,
-      };
-
-      const specFileData = template(specData);
-      const specFilePath = `${packageName}.spec`;
-
-      // if only the spec file is requested, just write it to the current directory
-      if (opts.specOnly) {
-        fs.writeFile(specFilePath, specFileData, { encoding: 'utf-8' }, (writeErr) => {
-          if (writeErr) throw writeErr;
-          console.log(`Wrote: ${specFilePath}`);
-        });
-      } else {
-        // write the spec file to the tmp directory
-        fs.writeFile(path.join(tmpPath, specFilePath), specFileData, { encoding: 'utf-8' }, (writeErr) => {
-          if (writeErr) throw writeErr;
-
-          // create an SRPM
-          childProcess.execFile('rpmbuild',
-            ['-bs',
-              '-D', '_srcrpmdir .',
-              '-D', `_sourcedir ${sourceDir}`,
-              '-D', `_specdir ${tmpPath}`,
-              path.join(tmpPath, specFilePath),
-            ], (processError, stdout, stderr) => {
-              if (processError) {
-                console.error(stderr);
-                throw processError;
-              }
-
-              process.stdout.write(stdout);
-              process.stderr.write(stderr);
-            });
-        });
-      }
+  // if only the spec file is requested, just write it to the current directory
+  if (opts.specOnly) {
+    fs.writeFile(specFilePath, specFileData, { encoding: 'utf-8' }, (writeErr) => {
+      if (writeErr) throw writeErr;
+      console.log(`Wrote: ${specFilePath}`);
     });
-  });
+  } else {
+    // write the spec file to the tmp directory
+    fs.writeFile(path.join(tmpPath, specFilePath), specFileData, { encoding: 'utf-8' }, (writeErr) => {
+      if (writeErr) throw writeErr;
+
+      // create an SRPM
+      childProcess.execFile('rpmbuild',
+        ['-bs',
+          '-D', '_srcrpmdir .',
+          '-D', `_sourcedir ${sourceDir}`,
+          '-D', `_specdir ${tmpPath}`,
+          path.join(tmpPath, specFilePath),
+        ], (processError, stdout, stderr) => {
+          if (processError) {
+            console.error(stderr);
+            throw processError;
+          }
+
+          process.stdout.write(stdout);
+          process.stderr.write(stderr);
+        });
+    });
+  }
 }
 
-function processVersion(moduleName, moduleVersion, registryData, opts) {
+async function processVersion(moduleName, moduleVersion, registryData, opts) {
   // Grab and verify the dist tarball, unpack it
-  tmp.dir({ unsafeCleanup: true }, (err, tmpPath) => {
-    if (err) throw err;
+  const tmpPath = tmp.dirSync({ unsafeCleanup: true }).name;
+  const data = registryData.versions[moduleVersion];
 
-    const data = registryData.versions[moduleVersion];
+  // parse the URL to get the filename
+  const tarballName = new url.URL(data.dist.tarball).pathname.split('/').pop();
 
-    // parse the URL to get the filename
-    const tarballName = new url.URL(data.dist.tarball).pathname.split('/').pop();
+  const outputPath = path.join(tmpPath, tarballName);
+  const outputStream = fs.createWriteStream(outputPath);
 
-    const outputPath = path.join(tmpPath, tarballName);
-    const outputStream = fs.createWriteStream(outputPath);
+  // create a pass-through stream to calculate the SHA1 as we download
+  const tee = new stream.PassThrough();
+  const hash = crypto.createHash('sha1');
+  tee
+    .on('data', (chunk) => {
+      hash.update(chunk);
+      outputStream.write(chunk);
+    });
 
-    // create a pass-through stream to calculate the SHA1 as we download
-    const tee = new stream.PassThrough();
-    const hash = crypto.createHash('sha1');
-    tee
-      .on('data', (chunk) => {
-        hash.update(chunk);
-        outputStream.write(chunk);
-      });
+  await fetch(data.dist.tarball)
+    .then(res => res.buffer())
+    .then((buffer) => {
+      tee.write(buffer);
+    });
 
-    request(data.dist.tarball).pipe(tee)
-      .on('finish', () => {
-        const digest = hash.digest('hex');
+  // check the hash
+  const digest = hash.digest('hex');
+  if (digest !== data.dist.shasum) {
+    throw new Error(`SHA1 digest for ${moduleName}@${moduleVersion} does not match`);
+  }
 
-        // check the hash
-        if (digest !== data.dist.shasum) {
-          throw new Error(`SHA1 digest for ${moduleName}@${moduleVersion} does not match`);
-        }
-
-        // unpack the tarball
-        // tarballs from npm will unpack into a 'package' directory
-        unpackTarball(outputPath, tmpPath)
-          .on('finish', () => {
-            makeSRPM(tmpPath, data.dist.tarball, path.dirname(outputPath), path.join(tmpPath, 'package'), opts);
-          });
-      });
-  });
+  // unpack the tarball
+  // tarballs from npm will unpack into a 'package' directory
+  await unpackTarball(outputPath, tmpPath);
+  makeSRPM(tmpPath, data.dist.tarball, path.dirname(outputPath), path.join(tmpPath, 'package'), opts);
 }
 
-function processModuleRegistry(moduleName, versionMatch, opts) {
-  const uri = opts.registryUrl + encodeModuleName(moduleName);
+async function processModuleRegistry(moduleName, versionMatch, opts) {
+  const uri = `/${encodeModuleName(moduleName)}`;
   let versions;
   let version;
 
-  npmClient.get(uri, npmClientConf, (error, data) => {
-    if (error) {
-      throw error;
+  const data = await npmFetch.json(uri);
+
+  // find a matching version
+  // start with the dist-tags
+  if (versionMatch in data['dist-tags']) {
+    processVersion(moduleName, data['dist-tags'][versionMatch], data, opts);
+  } else {
+    // Otherwise, treat versionMatch as a semver expression and look
+    // for the greatest match
+    versions = Object.keys(data.versions);
+    version = semver.maxSatisfying(versions, versionMatch);
+    if (version === null) {
+      throw new Error(`No version available for ${moduleName} matching ${versionMatch}`);
     }
 
-    // find a matching version
-    // start with the dist-tags
-    if (versionMatch in data['dist-tags']) {
-      processVersion(moduleName, data['dist-tags'][versionMatch], data, opts);
-    } else {
-      // Otherwise, treat versionMatch as a semver expression and look
-      // for the greatest match
-      versions = Object.keys(data.versions);
-      version = semver.maxSatisfying(versions, versionMatch);
-      if (version === null) {
-        throw new Error(`No version available for ${moduleName} matching ${versionMatch}`);
-      }
-
-      processVersion(moduleName, version, data, opts);
-    }
-  });
+    processVersion(moduleName, version, data, opts);
+  }
 }
 
-function processModule(moduleName, versionMatch, opts) {
+async function processModule(moduleName, versionMatch, opts) {
   // if this is a local module, create a new tmp directory,
   // unpack the tarball and skip to makeSRPM
   if (opts.isLocal) {
-    tmp.dir({ unsafeCleanup: true }, (err, tmpPath) => {
-      if (err) throw err;
-
-      unpackTarball(moduleName, tmpPath)
-        .on('finish', () => {
-          makeSRPM(tmpPath,
-            path.basename(moduleName),
-            path.dirname(moduleName),
-            path.join(tmpPath, 'package'),
-            opts);
-        });
-    });
+    const tmpPath = tmp.dirSync({ unsafeCleanup: true });
+    await unpackTarball(moduleName, tmpPath);
+    makeSRPM(tmpPath,
+      path.basename(moduleName),
+      path.dirname(moduleName),
+      path.join(tmpPath, 'package'),
+      opts);
   } else {
     processModuleRegistry(moduleName, versionMatch, opts);
   }
@@ -629,7 +622,6 @@ async function main() {
     })
     .option('registry', {
       type: 'string',
-      default: 'https://registry.npmjs.org/',
       describe: 'Base URL of the npm registry to use',
     })
     .coerce('registry', (registry) => {
@@ -691,6 +683,10 @@ async function main() {
     })
     .strict();
 
+  if (argv.registry) {
+    npmClientConf.registry = argv.registry;
+  }
+
   const opts = {
     isLocal: argv.local,
     registryUrl: argv.registry,
@@ -701,14 +697,13 @@ async function main() {
     disableCheck: argv['disable-check'],
   };
 
-  try {
-    await processModule(argv._[0], argv.tag, opts);
-  } catch (e) {
-    console.error(`Error creating SRPM: ${e}`);
-    process.exit(1);
-  }
+  await processModule(argv._[0], argv.tag, opts);
 }
 
 if (require.main === module) {
+  process.on('unhandledRejection', (e) => {
+    console.error(`Error creating SRPM: ${e}`);
+    process.exit(1);
+  });
   main();
 }
