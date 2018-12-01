@@ -317,7 +317,7 @@ function patchShebang(tmpPath, modulePath) {
           patchIndex += 1;
 
           fs.writeFileSync(patchPath, diffData, { encoding: 'latin1' });
-          return acc.concat([patchPath]);
+          return acc.concat([path.basename(patchPath)]);
         }
 
         return acc;
