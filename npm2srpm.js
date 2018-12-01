@@ -528,13 +528,31 @@ async function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, opts) {
   }
 }
 
-async function processVersion(moduleName, moduleVersion, registryData, opts) {
-  // Grab and verify the dist tarball, unpack it
-  const tmpPath = tmp.dirSync({ unsafeCleanup: true }).name;
-  const data = registryData.versions[moduleVersion];
+async function fetchVersion(tmpPath, moduleName, versionMatch) {
+  const uri = `/${encodeModuleName(moduleName)}`;
+  let versions;
+  let version = null;
+
+  const registryData = await npmFetch.json(uri);
+
+  // find a matching version
+  // start with the dist-tags
+  if (versionMatch in registryData['dist-tags']) {
+    version = registryData['dist-tags'][versionMatch];
+  } else {
+    // Otherwise, treat versionMatch as a semver expression and look
+    // for the greatest match
+    versions = Object.keys(registryData.versions);
+    version = semver.maxSatisfying(versions, versionMatch);
+  }
+
+  if (version === null) {
+    throw new Error(`No version available for ${moduleName} matching ${versionMatch}`);
+  }
 
   // parse the URL to get the filename
-  const tarballName = new url.URL(data.dist.tarball).pathname.split('/').pop();
+  const versionData = registryData.versions[version];
+  const tarballName = new url.URL(versionData.dist.tarball).pathname.split('/').pop();
 
   const outputPath = path.join(tmpPath, tarballName);
   const outputStream = fs.createWriteStream(outputPath);
@@ -548,7 +566,7 @@ async function processVersion(moduleName, moduleVersion, registryData, opts) {
       outputStream.write(chunk);
     });
 
-  await fetch(data.dist.tarball)
+  await fetch(versionData.dist.tarball)
     .then(res => res.buffer())
     .then((buffer) => {
       tee.write(buffer);
@@ -556,38 +574,30 @@ async function processVersion(moduleName, moduleVersion, registryData, opts) {
 
   // check the hash
   const digest = hash.digest('hex');
-  if (digest !== data.dist.shasum) {
-    throw new Error(`SHA1 digest for ${moduleName}@${moduleVersion} does not match`);
+  if (digest !== versionData.dist.shasum) {
+    throw new Error(`SHA1 digest for ${moduleName}@${version} does not match`);
   }
 
-  // unpack the tarball
-  // tarballs from npm will unpack into a 'package' directory
-  await unpackTarball(outputPath, tmpPath);
-  makeSRPM(tmpPath, data.dist.tarball, path.dirname(outputPath), path.join(tmpPath, 'package'), opts);
+  // return the tarball path and the object from the registry
+  return {
+    tarball: outputPath,
+    versionData,
+  };
 }
 
 async function processModuleRegistry(moduleName, versionMatch, opts) {
-  const uri = `/${encodeModuleName(moduleName)}`;
-  let versions;
-  let version;
+  const tmpPath = tmp.dirSync({ unsafeCleanup: true }).name;
+  const fetchObj = await fetchVersion(tmpPath, moduleName, versionMatch);
 
-  const data = await npmFetch.json(uri);
+  await unpackTarball(fetchObj.tarball, tmpPath);
 
-  // find a matching version
-  // start with the dist-tags
-  if (versionMatch in data['dist-tags']) {
-    processVersion(moduleName, data['dist-tags'][versionMatch], data, opts);
-  } else {
-    // Otherwise, treat versionMatch as a semver expression and look
-    // for the greatest match
-    versions = Object.keys(data.versions);
-    version = semver.maxSatisfying(versions, versionMatch);
-    if (version === null) {
-      throw new Error(`No version available for ${moduleName} matching ${versionMatch}`);
-    }
-
-    processVersion(moduleName, version, data, opts);
-  }
+  makeSRPM(
+    tmpPath,
+    fetchObj.versionData.dist.tarball,
+    tmpPath,
+    path.join(tmpPath, 'package'),
+    opts,
+  );
 }
 
 async function processModule(moduleName, versionMatch, opts) {
