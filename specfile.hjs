@@ -28,6 +28,10 @@ URL:            {{{url}}}
 {{/if}}
 Source0:        {{{sourceUrl}}}
 
+{{#each bundledSources}}
+Source{{{idx}}}: {{{tarball}}}
+{{/each}}
+
 {{#each patches}}
 Patch{{{patchNum}}}: {{{patchName}}}
 {{/each}}
@@ -66,6 +70,16 @@ Requires:       {{{requirement}}}
 
 %prep
 %autosetup -p0 -n package
+{{#each bundledSources}}
+
+%setup -c -D -T -a {{{idx}}} -n package/node_modules
+mv package {{{name}}}
+{{/each}}
+{{#if bundledSources}}
+
+# one more, with no deleting or unpacking or anything, to reset the build directory
+%setup -T -D -n package
+{{/if}}
 
 %build
 {{#if binary}}
@@ -86,6 +100,12 @@ export npm_config_nodedir
 mkdir -p %{buildroot}%{npmlib_dir}/%{modulename}/%{version}
 {{#each fileList}}
 cp -pr {{{fileName}}} %{buildroot}%{npmlib_dir}/%{modulename}/%{version}
+{{/each}}
+{{#if bundledSources}}
+mkdir -p %{buildroot}%{npmlib_dir}/%{modulename}/%{version}/node_modules
+{{/if}}
+{{#each bundledSources}}
+cp -pr node_modules/{{{name}}} %{buildroot}%{npmlib_dir}/%{modulename}/%{version}/node_modules/{{{name}}}
 {{/each}}
 {{#if binary}}
 mkdir -p %{buildroot}%{npmlib_dir}/%{modulename}/%{version}/build/Release
@@ -120,10 +140,16 @@ mkdir %{buildroot}%{nodejs_dir}/%{modulescope}
 ln -s %{npmlib_dir}/%{modulename}/%{version} %{buildroot}/%{nodejs_dir}/%{modulename}
 
 %{npmlib_symlink_deps}
+{{#each bundledSources}}
+%{npmlib_symlink_deps} %{buildroot}%{npmlib_dir}/%{modulename}/%{version}/node_modules/{{{name}}}
+{{/each}}
 
 {{#if check}}
 %check
-rm -rf node_modules && %{npmlib_symlink_deps} .
+%{npmlib_symlink_deps} .
+{{#each bundledSources}}
+%{npmlib_symlink_deps} ./node_modules/{{{name}}}
+{{/each}}
 %{__nodejs} -e 'require("./")'
 {{/if}}
 

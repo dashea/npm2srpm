@@ -194,37 +194,33 @@ function constraintToBuildReq(depName, constraint) {
   return `${reqName} = ${constraint}`;
 }
 
-function depsToBuildReqs(dep) {
-  if (!dep) { return []; }
+function depToBuildReq(depName, depVersion) {
+  // Normalize(ish) the version
+  const versionRange = semver.validRange(depVersion);
 
-  return Object.entries(dep).map(([depName, depVersion]) => {
-    // Normalize(ish) the version
-    const versionRange = semver.validRange(depVersion);
+  // If versionRange returned null, something went wrong
+  if (versionRange === null) {
+    throw new Error(`Invalid version range for ${depName}: ${depVersion}`);
+  }
 
-    // If versionRange returned null, something went wrong
-    if (versionRange === null) {
-      throw new Error(`Invalid version range for ${depName}: ${depVersion}`);
-    }
+  // result of validRange is now a DNF expression,
+  // converted to a string as 'a b||c d', with spaces
+  // being AND and || being OR. Split all of that back apart.
+  const versionDNF = versionRange.split('||').map(s => s.split(' '));
 
-    // result of validRange is now a DNF expression,
-    // converted to a string as 'a b||c d', with spaces
-    // being AND and || being OR. Split all of that back apart.
-    const versionDNF = versionRange.split('||').map(s => s.split(' '));
+  // convert each of the version units to an RPM expression
+  const buildReqDNF = versionDNF
+    .map(andExp => andExp.map(exp => constraintToBuildReq(depName, exp)));
 
-    // convert each of the version units to an RPM expression
-    const buildReqDNF = versionDNF
-      .map(andExp => andExp.map(exp => constraintToBuildReq(depName, exp)));
+  // for each of the AND clauses (the inner expressions), we want to
+  // convert 'a AND b' into 'a with b'.
+  // Each of the OR expressions just becomes 'a or b'.
+  // wrap the whole thing in parenthesis to tell RPM it's a boolean dep
+  const rpmExpression = `(${buildReqDNF.map(andExp => `(${andExp.join(' with ')})`)
+    .join(' or ')})`;
 
-    // for each of the AND clauses (the inner expressions), we want to
-    // convert 'a AND b' into 'a with b'.
-    // Each of the OR expressions just becomes 'a or b'.
-    // wrap the whole thing in parenthesis to tell RPM it's a boolean dep
-    const rpmExpression = `(${buildReqDNF.map(andExp => `(${andExp.join(' with ')})`)
-      .join(' or ')})`;
-
-    // wrap the whole thing in an object for the template
-    return { buildRequiresExp: rpmExpression };
-  });
+  // wrap the whole thing in an object for the template
+  return { buildRequiresExp: rpmExpression };
 }
 
 function mapBin(bin) {
@@ -331,6 +327,67 @@ function patchShebang(tmpPath, modulePath) {
   return patchShebangHelper('.');
 }
 
+async function fetchVersion(tmpPath, moduleName, versionMatch) {
+  const uri = `/${encodeModuleName(moduleName)}`;
+  let versions;
+  let version = null;
+
+  const registryData = await npmFetch.json(uri);
+
+  // find a matching version
+  // start with the dist-tags
+  if (versionMatch in registryData['dist-tags']) {
+    version = registryData['dist-tags'][versionMatch];
+  } else {
+    // Otherwise, treat versionMatch as a semver expression and look
+    // for the greatest match
+    versions = Object.keys(registryData.versions);
+    version = semver.maxSatisfying(versions, versionMatch);
+  }
+
+  if (version === null) {
+    throw new Error(`No version available for ${moduleName} matching ${versionMatch}`);
+  }
+
+  // parse the URL to get the filename
+  const versionData = registryData.versions[version];
+  const tarballName = new url.URL(versionData.dist.tarball).pathname.split('/').pop();
+
+  const outputPath = path.join(tmpPath, tarballName);
+  const outputStream = fs.createWriteStream(outputPath);
+  const outputPromise = streamToPromise(outputStream);
+
+  // parse the checksum data into an integrity object
+  // if no ssri data is available, convert the shasum property
+  let integrity;
+  if (versionData.dist.integrity) {
+    integrity = ssri.parse(versionData.dist.integrity);
+  } else {
+    integrity = ssri.fromHex(versionData.dist.shasum, 'sha1');
+  }
+
+  const integrityStream = ssri.integrityStream({ integrity });
+  const integrityPromise = streamToPromise(integrityStream);
+
+  // fetch the tarball and pipe it to both the integrity checker and the filesystem
+  await fetch(versionData.dist.tarball)
+    .then((res) => {
+      const promise = streamToPromise(res.body);
+      res.body.pipe(outputStream);
+      res.body.pipe(integrityStream);
+      return promise;
+    });
+
+  // make sure both the write streams complete
+  await Promise.all([outputPromise, integrityPromise]);
+
+  // return the tarball path and the object from the registry
+  return {
+    tarball: outputPath,
+    versionData,
+  };
+}
+
 async function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, opts) {
   const packageJSONPath = path.join(modulePath, 'package.json');
 
@@ -391,6 +448,48 @@ async function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, opts) {
       { requirement: 'gcc' },
       { requirement: 'gcc-c++' },
     ];
+  }
+
+  // convert the dependencies to a list, since after adding bundled module deps
+  // there could be repeated names
+  let buildRequires;
+  if (packageData.dependencies) {
+    buildRequires = Object
+      .entries(packageData.dependencies)
+      .map(([name, version]) => ({ name, version }));
+  } else {
+    buildRequires = [];
+  }
+
+  // fetch the tarballs for any additional deps to bundle, add their dependencies
+  // to the buildrequires.
+  // start indexes at 1, since the main source is Source0
+  let bundledSources = [];
+  if (opts.bundledDeps) {
+    const results = opts.bundledDeps.map(async (dep, idx) => {
+      const fetchObj = await fetchVersion(tmpPath, dep.name, dep.version);
+
+      if (fetchObj.versionData.dependencies) {
+        Object.entries(fetchObj.versionData.dependencies).forEach(([name, version]) => {
+          buildRequires.push({ name, version });
+        });
+      }
+
+      return { idx: idx + 1, tarball: fetchObj.versionData.dist.tarball, name: dep.name };
+    });
+    bundledSources = await Promise.all(results);
+
+    function isDepMatch(bundledDep, buildReq) { /* eslint-disable-line no-inner-declarations */
+      return ((bundledDep.name === buildReq.name) && (semver.satisfies(bundledDep.version, buildReq.version)));
+    }
+
+    // filter out the bundled deps from the buildRequires
+    opts.bundledDeps.forEach((bundledDep) => {
+      buildRequires = buildRequires.filter(buildReq => !isDepMatch(bundledDep, buildReq));
+    });
+
+    // filter the main module out of the buildRequires, in case that got added from a dependency loop
+    buildRequires = buildRequires.filter(buildReq => !isDepMatch({ name: packageData.name, version: packageData.version }, buildReq));
   }
 
   const cleanModuleName = packageData.name.replace(/\//g, '-').replace(/@/g, '');
@@ -479,7 +578,7 @@ async function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, opts) {
     license,
     url: packageUrl,
     sourceUrl,
-    buildRequires: depsToBuildReqs(packageData.dependencies),
+    buildRequires: buildRequires.map(dep => depToBuildReq(dep.name, dep.version)),
     binList: mapBin(packageData.bin),
     cldate: dateformat(Date(), 'ddd mmm d yyyy'),
     fileList,
@@ -492,6 +591,7 @@ async function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, opts) {
     installScript,
     binary,
     check,
+    bundledSources,
   };
 
   const specFileData = template(specData);
@@ -526,67 +626,6 @@ async function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, opts) {
         });
     });
   }
-}
-
-async function fetchVersion(tmpPath, moduleName, versionMatch) {
-  const uri = `/${encodeModuleName(moduleName)}`;
-  let versions;
-  let version = null;
-
-  const registryData = await npmFetch.json(uri);
-
-  // find a matching version
-  // start with the dist-tags
-  if (versionMatch in registryData['dist-tags']) {
-    version = registryData['dist-tags'][versionMatch];
-  } else {
-    // Otherwise, treat versionMatch as a semver expression and look
-    // for the greatest match
-    versions = Object.keys(registryData.versions);
-    version = semver.maxSatisfying(versions, versionMatch);
-  }
-
-  if (version === null) {
-    throw new Error(`No version available for ${moduleName} matching ${versionMatch}`);
-  }
-
-  // parse the URL to get the filename
-  const versionData = registryData.versions[version];
-  const tarballName = new url.URL(versionData.dist.tarball).pathname.split('/').pop();
-
-  const outputPath = path.join(tmpPath, tarballName);
-  const outputStream = fs.createWriteStream(outputPath);
-  const outputPromise = streamToPromise(outputStream);
-
-  // parse the checksum data into an integrity object
-  // if no ssri data is available, convert the shasum property
-  let integrity;
-  if (versionData.dist.integrity) {
-    integrity = ssri.parse(versionData.dist.integrity);
-  } else {
-    integrity = ssri.fromHex(versionData.dist.shasum, 'sha1');
-  }
-
-  const integrityStream = ssri.integrityStream({ integrity });
-  const integrityPromise = streamToPromise(integrityStream);
-
-  // fetch the tarball and pipe it to both the integrity checker and the filesystem
-  await fetch(versionData.dist.tarball)
-    .then((res) => {
-      const promise = streamToPromise(res.body);
-      res.body.pipe(outputStream);
-      res.body.pipe(integrityStream);
-      return promise;
-    });
-
-  // make sure both the write streams complete
-  await Promise.all([outputPromise, integrityPromise]);
-
-  // return the tarball path and the object from the registry
-  return {
-    tarball: outputPath,
-    versionData,
-  };
 }
 
 async function processModuleRegistry(moduleName, versionMatch, opts) {
@@ -668,12 +707,36 @@ async function main() {
       default: false,
       describe: 'Disable %check',
     })
+    .option('bundle', {
+      type: 'string',
+      describe: 'Bundle a dependency (<name>@<version>)',
+    })
     // for cli arguments specified multiple times, yargs will create an array of strings.
     // if the argument is only specified once, yargs will create a string.
     // for arguments we expect multiple times, make the type consistent
     .coerce({
       'add-dep': normalizeArgList,
     })
+    // do bundle separately since there's more to do than just normalizeArgList
+    .coerce('bundle', bundle => normalizeArgList(bundle).map((dep) => {
+      // split the bundled deps (name@version) into name, version
+      let name;
+      let version;
+
+      // if it's a scoped package, the first @ isn't the one we want
+      if (dep.startsWith('@')) {
+        [name, version] = dep.slice(1).split('@');
+        name = `@${name}`;
+      } else {
+        [name, version] = dep.split('@');
+      }
+
+      if (version === undefined) {
+        version = 'latest';
+      }
+
+      return { name, version };
+    }))
     .check((args) => {
       // make sure the arguments that make sense only once are only specified once
       enforceSingleArg(args.tag, '--tag');
@@ -709,6 +772,7 @@ async function main() {
     addDeps: argv['add-dep'],
     release: argv.release,
     disableCheck: argv['disable-check'],
+    bundledDeps: argv.bundle,
   };
 
   await processModule(argv._[0], argv.tag, opts);
