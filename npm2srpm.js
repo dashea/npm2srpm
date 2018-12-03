@@ -18,7 +18,6 @@
 
 const childProcess = require('child_process');
 const csvParseSync = require('csv-parse/lib/sync');
-const crypto = require('crypto');
 const dateformat = require('dateformat');
 const diff = require('diff');
 const fetch = require('node-fetch');
@@ -30,7 +29,8 @@ const readPackageJSON = require('read-package-json');
 const semver = require('semver');
 const spdxCorrect = require('spdx-correct');
 const spdxParse = require('spdx-expression-parse');
-const stream = require('stream');
+const ssri = require('ssri');
+const streamToPromise = require('stream-to-promise');
 const tar = require('tar');
 const tmp = require('tmp');
 const url = require('url');
@@ -556,27 +556,31 @@ async function fetchVersion(tmpPath, moduleName, versionMatch) {
 
   const outputPath = path.join(tmpPath, tarballName);
   const outputStream = fs.createWriteStream(outputPath);
+  const outputPromise = streamToPromise(outputStream);
 
-  // create a pass-through stream to calculate the SHA1 as we download
-  const tee = new stream.PassThrough();
-  const hash = crypto.createHash('sha1');
-  tee
-    .on('data', (chunk) => {
-      hash.update(chunk);
-      outputStream.write(chunk);
-    });
-
-  await fetch(versionData.dist.tarball)
-    .then(res => res.buffer())
-    .then((buffer) => {
-      tee.write(buffer);
-    });
-
-  // check the hash
-  const digest = hash.digest('hex');
-  if (digest !== versionData.dist.shasum) {
-    throw new Error(`SHA1 digest for ${moduleName}@${version} does not match`);
+  // parse the checksum data into an integrity object
+  // if no ssri data is available, convert the shasum property
+  let integrity;
+  if (versionData.dist.integrity) {
+    integrity = ssri.parse(versionData.dist.integrity);
+  } else {
+    integrity = ssri.fromHex(versionData.dist.shasum, 'sha1');
   }
+
+  const integrityStream = ssri.integrityStream({ integrity });
+  const integrityPromise = streamToPromise(integrityStream);
+
+  // fetch the tarball and pipe it to both the integrity checker and the filesystem
+  await fetch(versionData.dist.tarball)
+    .then((res) => {
+      const promise = streamToPromise(res.body);
+      res.body.pipe(outputStream);
+      res.body.pipe(integrityStream);
+      return promise;
+    });
+
+  // make sure both the write streams complete
+  await Promise.all([outputPromise, integrityPromise]);
 
   // return the tarball path and the object from the registry
   return {
