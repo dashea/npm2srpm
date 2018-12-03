@@ -712,8 +712,7 @@ async function main() {
 
 if (require.main === module) {
   process.on('unhandledRejection', (e) => {
-    console.error(`Error creating SRPM: ${e}`);
-    process.exit(1);
+    throw e;
   });
   main();
 }
