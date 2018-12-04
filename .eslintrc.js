@@ -1,5 +1,6 @@
 module.exports = {
-  "extends": "airbnb-base",
+  "plugins": ["promise"],
+  "extends": ["airbnb-base", "plugin:promise/recommended"],
   "env": {
     "node": true,
   },
