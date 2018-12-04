@@ -647,7 +647,7 @@ async function processModule(moduleName, versionMatch, opts) {
   // if this is a local module, create a new tmp directory,
   // unpack the tarball and skip to makeSRPM
   if (opts.isLocal) {
-    const tmpPath = tmp.dirSync({ unsafeCleanup: true });
+    const tmpPath = tmp.dirSync({ unsafeCleanup: true }).name;
     await unpackTarball(moduleName, tmpPath);
     makeSRPM(tmpPath,
       path.basename(moduleName),
