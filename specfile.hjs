@@ -119,6 +119,7 @@ cp -p build/Release/*.node %{buildroot}%{npmlib_dir}/%{modulename}/%{version}/bu
 mkdir -p %{buildroot}%{_bindir}
 {{/if}}
 {{#each binList}}
+chmod +x %{buildroot}%{npmlib_dir}/%{modulename}/%{version}/{{{modulePath}}}
 ln -s %{npmlib_dir}/%{modulename}/%{version}/{{{modulePath}}} %{buildroot}/%{_bindir}/{{{binPath}}}
 {{/each}}
 
