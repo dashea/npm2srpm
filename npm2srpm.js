@@ -461,6 +461,12 @@ async function makeSRPM(tmpPath, sourceUrl, sourceDir, modulePath, opts) {
     buildRequires = [];
   }
 
+  // normalize-package-data, for some reason, copies whatever is in optionalDependencies
+  // to the regular dependencies. Filter them back out.
+  if (packageData.optionalDependencies) {
+    buildRequires = buildRequires.filter(buildReq => !(buildReq.name in packageData.optionalDependencies));
+  }
+
   // fetch the tarballs for any additional deps to bundle, add their dependencies
   // to the buildrequires.
   // start indexes at 1, since the main source is Source0
